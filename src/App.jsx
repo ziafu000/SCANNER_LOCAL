@@ -30,6 +30,32 @@ function canvasFilter(source, kind) {
   return c
 }
 
+function preprocessCanvas(src) {
+  const cv = window.cv
+  if (!cv?.Mat) return src // cv not ready, pass through
+  const mat = cv.imread(src)
+  const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat(),
+        dilated = new cv.Mat(), closed = new cv.Mat(), result = new cv.Mat()
+  try {
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY)
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
+    cv.Canny(blur, edges, 75, 200)
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3))
+    cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 2)
+    cv.morphologyEx(dilated, closed, cv.MORPH_CLOSE, kernel)
+    kernel.delete()
+    cv.cvtColor(closed, result, cv.COLOR_GRAY2RGBA)
+    const out = document.createElement('canvas')
+    out.width = src.width; out.height = src.height
+    cv.imshow(out, result)
+    return out
+  } finally {
+    for (const m of [mat, gray, blur, edges, dilated, closed, result]) {
+      try { m.delete() } catch { /* already freed */ }
+    }
+  }
+}
+
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const i = new Image()
@@ -110,8 +136,16 @@ export default function App() {
     const c = o.getContext('2d')
     c.drawImage(v, 0, 0, w, h)
     try {
-      const marked = scan.current.highlightPaper(o, { color: '#20e3a2', thickness: 7 })
-      c.drawImage(marked, 0, 0, w, h)
+      const preprocessed = preprocessCanvas(o)
+      let color = '#20e3a2'
+      let marked
+      try {
+        marked = scan.current.highlightPaper(preprocessed, { color, thickness: 7 })
+      } catch {
+        color = '#fbbf24' // uncertain — yellow fallback
+        try { marked = scan.current.highlightPaper(o, { color, thickness: 7 }) } catch { marked = null }
+      }
+      if (marked) c.drawImage(marked, 0, 0, w, h)
     } catch { /* detection can fail occasionally */ }
     frame.current = requestAnimationFrame(drawLive)
   }
@@ -125,7 +159,13 @@ export default function App() {
     stopped()
 
     let out = null
-    try { out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width)) } catch { /* fallback below */ }
+    try {
+      const preprocessed = preprocessCanvas(c)
+      out = scan.current.extractPaper(preprocessed, 1600, Math.round(1600 * c.height / c.width))
+    } catch { /* fallback below */ }
+    if (!out) {
+      try { out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width)) } catch { out = c }
+    }
     if (!out) out = c
 
     // Store raw capture and cropped (pre-filter) separately
@@ -151,14 +191,19 @@ export default function App() {
     const c = document.createElement('canvas')
     c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
     let out
+    const corners = {
+      topLeftCorner: draft.points[0],
+      topRightCorner: draft.points[1],
+      bottomRightCorner: draft.points[2],
+      bottomLeftCorner: draft.points[3],
+    }
     try {
-      out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width), {
-        topLeftCorner: draft.points[0],
-        topRightCorner: draft.points[1],
-        bottomRightCorner: draft.points[2],
-        bottomLeftCorner: draft.points[3],
-      })
-    } catch { out = c }
+      const preprocessed = preprocessCanvas(c)
+      out = scan.current.extractPaper(preprocessed, 1600, Math.round(1600 * c.height / c.width), corners)
+    } catch {
+      try { out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width), corners) } catch { out = c }
+    }
+    if (!out) out = c
 
     const croppedBlob = await blobFrom(out)
     const filtered = canvasFilter(out, filter)
@@ -216,15 +261,21 @@ export default function App() {
     const items = draft ? [...pages, { ...draft, id: uid() }] : pages
     if (!items.length) return
     setStatus('Đang tạo PDF…')
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
+    const PX_TO_MM = 25.4 / 96
+    let pdf = null
     for (let i = 0; i < items.length; i++) {
-      if (i) pdf.addPage()
       const im = await loadImage(items[i].url)
-      const ratio = im.width / im.height
-      const pw = 190
-      const ph = Math.min(277, pw / ratio)
-      const x = 10, y = (297 - ph) / 2
-      pdf.addImage(items[i].url, 'JPEG', x, y, pw, ph)
+      const imgW = im.naturalWidth * PX_TO_MM
+      const imgH = im.naturalHeight * PX_TO_MM
+      const pageW = Math.min(210, imgW)
+      const pageH = pageW * (imgH / imgW)
+      const orientation = pageW >= pageH ? 'landscape' : 'portrait'
+      if (i === 0) {
+        pdf = new jsPDF({ unit: 'mm', format: [pageW, pageH], orientation })
+      } else {
+        pdf.addPage([pageW, pageH], orientation)
+      }
+      pdf.addImage(items[i].url, 'JPEG', 0, 0, pageW, pageH)
     }
     const b = pdf.output('blob')
     download(b, `SCANNER-${Date.now()}.pdf`)
