@@ -356,15 +356,24 @@ export default function App() {
     const items = draft ? [...pages, { ...draft, id: uid() }] : pages
     if (!items.length) return
     setStatus('Đang tạo PDF…')
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
+    let pdf = null
     for (let i = 0; i < items.length; i++) {
-      if (i) pdf.addPage()
       const im = await loadImage(items[i].url)
-      const ratio = im.width / im.height
-      const pw = 190
-      const ph = Math.min(277, pw / ratio)
-      const x = 10, y = (297 - ph) / 2
-      pdf.addImage(items[i].url, 'JPEG', x, y, pw, ph)
+      const imgWidth = im.naturalWidth || im.width
+      const imgHeight = im.naturalHeight || im.height
+      const orientation = imgWidth > imgHeight ? 'l' : 'p'
+      
+      if (i === 0) {
+        pdf = new jsPDF({
+          orientation: orientation,
+          unit: 'px',
+          format: [imgWidth, imgHeight],
+          hotfixes: ['px_scaling']
+        })
+      } else {
+        pdf.addPage([imgWidth, imgHeight], orientation)
+      }
+      pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
     }
     const b = pdf.output('blob')
     download(b, `SCANNER-${Date.now()}.pdf`)
