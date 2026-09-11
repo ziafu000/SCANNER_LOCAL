@@ -48,6 +48,15 @@ function fitPoints(w, h) {
   ]
 }
 
+function orderPoints(pts) {
+  const sumSorted = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
+  const tl = sumSorted[0]
+  const br = sumSorted[3]
+  const remaining = [sumSorted[1], sumSorted[2]]
+  remaining.sort((a, b) => (b.x - b.y) - (a.x - a.y))
+  return [tl, remaining[0], br, remaining[1]]
+}
+
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
   const src = cv.imread(canvas)
@@ -77,53 +86,54 @@ function findOptimalCorners(canvas) {
 
   let points = null
   if (maxContour && maxArea > (canvas.width * canvas.height * 0.02)) {
-    const rect = cv.minAreaRect(maxContour)
-    const pts = []
-    
-    let usedBoxPoints = false
-    if (cv.boxPoints) {
-      try {
-        const box = new cv.Mat()
-        cv.boxPoints(rect, box)
-        for (let i = 0; i < 4; i++) {
-          pts.push({ x: box.data32F[i * 2], y: box.data32F[i * 2 + 1] })
-        }
-        box.delete()
-        usedBoxPoints = true
-      } catch (e) {
-        console.warn('cv.boxPoints failed, falling back to manual calculation', e)
-      }
-    }
-    
-    if (!usedBoxPoints) {
-      // Manual calculation if cv.boxPoints is missing or failed
-      const cx = rect.center.x, cy = rect.center.y
-      const w = rect.size.width / 2, h = rect.size.height / 2
-      const angle = (rect.angle * Math.PI) / 180.0
-      const cosA = Math.cos(angle), sinA = Math.sin(angle)
-      const offsets = [
-        { x: -w, y: -h },
-        { x: w, y: -h },
-        { x: w, y: h },
-        { x: -w, y: h }
-      ]
-      for (const p of offsets) {
-        pts.push({
-          x: cx + p.x * cosA - p.y * sinA,
-          y: cy + p.x * sinA + p.y * cosA
-        })
-      }
-    }
+    const peri = cv.arcLength(maxContour, true)
+    const approx = new cv.Mat()
+    cv.approxPolyDP(maxContour, approx, 0.02 * peri, true)
 
-    let tl = pts[0], tr = pts[0], br = pts[0], bl = pts[0]
-    let minSum = 1e9, maxSum = -1e9, minDiff = 1e9, maxDiff = -1e9
-    for (const p of pts) {
-      if (p.x + p.y < minSum) { minSum = p.x + p.y; tl = p }
-      if (p.x + p.y > maxSum) { maxSum = p.x + p.y; br = p }
-      if (p.x - p.y < minDiff) { minDiff = p.x - p.y; bl = p }
-      if (p.x - p.y > maxDiff) { maxDiff = p.x - p.y; tr = p }
+    const pts = []
+    if (approx.rows === 4) {
+      for (let i = 0; i < 4; i++) {
+        pts.push({ x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] })
+      }
+    } else {
+      const rect = cv.minAreaRect(maxContour)
+      let usedBoxPoints = false
+      if (cv.boxPoints) {
+        try {
+          const box = new cv.Mat()
+          cv.boxPoints(rect, box)
+          for (let i = 0; i < 4; i++) {
+            pts.push({ x: box.data32F[i * 2], y: box.data32F[i * 2 + 1] })
+          }
+          box.delete()
+          usedBoxPoints = true
+        } catch (e) {
+          console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+        }
+      }
+      
+      if (!usedBoxPoints) {
+        const cx = rect.center.x, cy = rect.center.y
+        const w = rect.size.width / 2, h = rect.size.height / 2
+        const angle = (rect.angle * Math.PI) / 180.0
+        const cosA = Math.cos(angle), sinA = Math.sin(angle)
+        const offsets = [
+          { x: -w, y: -h },
+          { x: w, y: -h },
+          { x: w, y: h },
+          { x: -w, y: h }
+        ]
+        for (const p of offsets) {
+          pts.push({
+            x: cx + p.x * cosA - p.y * sinA,
+            y: cy + p.x * sinA + p.y * cosA
+          })
+        }
+      }
     }
-    points = [tl, tr, br, bl]
+    approx.delete()
+
+    points = orderPoints(pts)
   }
 
   if (maxContour) maxContour.delete()
@@ -228,9 +238,21 @@ export default function App() {
     let out = null
     let points = null
     try {
-      points = findOptimalCorners(c)
-      if (points) {
-        out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width), {
+      const max = 700, scale = Math.min(1, max / c.width)
+      const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
+      const dc = document.createElement('canvas')
+      dc.width = dw; dc.height = dh
+      dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
+
+      const scaledPoints = findOptimalCorners(dc)
+      if (scaledPoints) {
+        points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+        
+        const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
+        const w = Math.round(Math.max(dist(points[0], points[1]), dist(points[3], points[2])))
+        const h = Math.round(Math.max(dist(points[0], points[3]), dist(points[1], points[2])))
+
+        out = scan.current.extractPaper(c, w, h, {
           topLeftCorner: points[0],
           topRightCorner: points[1],
           bottomRightCorner: points[2],
@@ -266,7 +288,11 @@ export default function App() {
     c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
     let out
     try {
-      out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width), {
+      const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
+      const w = Math.round(Math.max(dist(draft.points[0], draft.points[1]), dist(draft.points[3], draft.points[2])))
+      const h = Math.round(Math.max(dist(draft.points[0], draft.points[3]), dist(draft.points[1], draft.points[2])))
+
+      out = scan.current.extractPaper(c, w, h, {
         topLeftCorner: draft.points[0],
         topRightCorner: draft.points[1],
         bottomRightCorner: draft.points[2],
