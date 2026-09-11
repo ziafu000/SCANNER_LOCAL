@@ -66,44 +66,55 @@ function findOptimalCorners(canvas) {
   const edged = new cv.Mat()
   cv.Canny(gray, edged, 75, 200)
 
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
+  cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
+  kernel.delete()
+
   const contours = new cv.MatVector()
   const hierarchy = new cv.Mat()
-  cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+  cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-  let maxArea = 0
-  let maxContour = null
+  let candidates = []
+  const minArea = canvas.width * canvas.height * 0.15
 
   for (let i = 0; i < contours.size(); ++i) {
     const cnt = contours.get(i)
     const area = cv.contourArea(cnt)
-    if (area > maxArea) {
-      maxArea = area
-      if (maxContour) maxContour.delete()
-      maxContour = cnt.clone()
+    if (area > minArea) {
+      candidates.push({ area, cnt: cnt.clone() })
     }
     cnt.delete()
   }
 
-  let points = null
-  if (maxContour && maxArea > (canvas.width * canvas.height * 0.02)) {
-    const peri = cv.arcLength(maxContour, true)
-    const approx = new cv.Mat()
-    cv.approxPolyDP(maxContour, approx, 0.02 * peri, true)
+  candidates.sort((a, b) => b.area - a.area)
 
-    const pts = []
+  let points = null
+  let fallbackPoints = null
+
+  for (let i = 0; i < candidates.length; i++) {
+    const { cnt } = candidates[i]
+    const peri = cv.arcLength(cnt, true)
+    const approx = new cv.Mat()
+    cv.approxPolyDP(cnt, approx, 0.02 * peri, true)
+
     if (approx.rows === 4) {
-      for (let i = 0; i < 4; i++) {
-        pts.push({ x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] })
+      const pts = []
+      for (let j = 0; j < 4; j++) {
+        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
       }
-    } else {
-      const rect = cv.minAreaRect(maxContour)
+      points = orderPoints(pts)
+      approx.delete()
+      break
+    } else if (i === 0) {
+      const pts = []
+      const rect = cv.minAreaRect(cnt)
       let usedBoxPoints = false
       if (cv.boxPoints) {
         try {
           const box = new cv.Mat()
           cv.boxPoints(rect, box)
-          for (let i = 0; i < 4; i++) {
-            pts.push({ x: box.data32F[i * 2], y: box.data32F[i * 2 + 1] })
+          for (let j = 0; j < 4; j++) {
+            pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
           }
           box.delete()
           usedBoxPoints = true
@@ -130,13 +141,19 @@ function findOptimalCorners(canvas) {
           })
         }
       }
+      fallbackPoints = orderPoints(pts)
     }
     approx.delete()
-
-    points = orderPoints(pts)
   }
 
-  if (maxContour) maxContour.delete()
+  if (!points && fallbackPoints) {
+    points = fallbackPoints
+  }
+
+  for (const c of candidates) {
+    c.cnt.delete()
+  }
+
   contours.delete()
   hierarchy.delete()
   edged.delete()
