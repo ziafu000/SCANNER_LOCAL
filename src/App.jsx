@@ -48,6 +48,94 @@ function fitPoints(w, h) {
   ]
 }
 
+function findOptimalCorners(canvas) {
+  if (!window.cv) return null
+  const src = cv.imread(canvas)
+  const gray = new cv.Mat()
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+  const edged = new cv.Mat()
+  cv.Canny(gray, edged, 75, 200)
+
+  const contours = new cv.MatVector()
+  const hierarchy = new cv.Mat()
+  cv.findContours(edged, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+
+  let maxArea = 0
+  let maxContour = null
+
+  for (let i = 0; i < contours.size(); ++i) {
+    const cnt = contours.get(i)
+    const area = cv.contourArea(cnt)
+    if (area > maxArea) {
+      maxArea = area
+      if (maxContour) maxContour.delete()
+      maxContour = cnt.clone()
+    }
+    cnt.delete()
+  }
+
+  let points = null
+  if (maxContour && maxArea > (canvas.width * canvas.height * 0.02)) {
+    const rect = cv.minAreaRect(maxContour)
+    const pts = []
+    
+    let usedBoxPoints = false
+    if (cv.boxPoints) {
+      try {
+        const box = new cv.Mat()
+        cv.boxPoints(rect, box)
+        for (let i = 0; i < 4; i++) {
+          pts.push({ x: box.data32F[i * 2], y: box.data32F[i * 2 + 1] })
+        }
+        box.delete()
+        usedBoxPoints = true
+      } catch (e) {
+        console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+      }
+    }
+    
+    if (!usedBoxPoints) {
+      // Manual calculation if cv.boxPoints is missing or failed
+      const cx = rect.center.x, cy = rect.center.y
+      const w = rect.size.width / 2, h = rect.size.height / 2
+      const angle = (rect.angle * Math.PI) / 180.0
+      const cosA = Math.cos(angle), sinA = Math.sin(angle)
+      const offsets = [
+        { x: -w, y: -h },
+        { x: w, y: -h },
+        { x: w, y: h },
+        { x: -w, y: h }
+      ]
+      for (const p of offsets) {
+        pts.push({
+          x: cx + p.x * cosA - p.y * sinA,
+          y: cy + p.x * sinA + p.y * cosA
+        })
+      }
+    }
+
+    let tl = pts[0], tr = pts[0], br = pts[0], bl = pts[0]
+    let minSum = 1e9, maxSum = -1e9, minDiff = 1e9, maxDiff = -1e9
+    for (const p of pts) {
+      if (p.x + p.y < minSum) { minSum = p.x + p.y; tl = p }
+      if (p.x + p.y > maxSum) { maxSum = p.x + p.y; br = p }
+      if (p.x - p.y < minDiff) { minDiff = p.x - p.y; bl = p }
+      if (p.x - p.y > maxDiff) { maxDiff = p.x - p.y; tr = p }
+    }
+    points = [tl, tr, br, bl]
+  }
+
+  if (maxContour) maxContour.delete()
+  contours.delete()
+  hierarchy.delete()
+  edged.delete()
+  gray.delete()
+  src.delete()
+
+  return points
+}
+
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
   const [screen, setScreen] = useState('camera')
@@ -110,8 +198,21 @@ export default function App() {
     const c = o.getContext('2d')
     c.drawImage(v, 0, 0, w, h)
     try {
-      const marked = scan.current.highlightPaper(o, { color: '#20e3a2', thickness: 7 })
-      c.drawImage(marked, 0, 0, w, h)
+      const pts = findOptimalCorners(o)
+      if (pts) {
+        c.strokeStyle = '#20e3a2'
+        c.lineWidth = 7
+        c.beginPath()
+        c.moveTo(pts[0].x, pts[0].y)
+        c.lineTo(pts[1].x, pts[1].y)
+        c.lineTo(pts[2].x, pts[2].y)
+        c.lineTo(pts[3].x, pts[3].y)
+        c.closePath()
+        c.stroke()
+      } else {
+        const marked = scan.current.highlightPaper(o, { color: '#20e3a2', thickness: 7 })
+        c.drawImage(marked, 0, 0, w, h)
+      }
     } catch { /* detection can fail occasionally */ }
     frame.current = requestAnimationFrame(drawLive)
   }
@@ -125,7 +226,20 @@ export default function App() {
     stopped()
 
     let out = null
-    try { out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width)) } catch { /* fallback below */ }
+    let points = null
+    try {
+      points = findOptimalCorners(c)
+      if (points) {
+        out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width), {
+          topLeftCorner: points[0],
+          topRightCorner: points[1],
+          bottomRightCorner: points[2],
+          bottomLeftCorner: points[3],
+        })
+      } else {
+        out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width))
+      }
+    } catch { /* fallback below */ }
     if (!out) out = c
 
     // Store raw capture and cropped (pre-filter) separately
@@ -139,7 +253,7 @@ export default function App() {
       url: urlOf(filteredBlob),
       raw: urlOf(rawBlob),
       cropped: urlOf(croppedBlob),
-      points: fitPoints(c.width, c.height),
+      points: points || fitPoints(c.width, c.height),
     })
     setFilter('color')
     setScreen('review')
