@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  background: #0b132b;
+  color: white;
+}
+
+body {
+  margin: 0;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+button, input {
+  font: inherit;
+}
+
+.tap {
+  min-height: 56px;
+  min-width: 56px;
+}
+
+.corner {
+  touch-action: none;
+}
+
+.paper-shadow {
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+}
