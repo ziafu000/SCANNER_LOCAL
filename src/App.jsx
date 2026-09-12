@@ -213,7 +213,15 @@ function customExtract(srcCanvas, pts) {
 
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
-  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (preview coords)
+  // Offscreen canvas for downscaled OpenCV detection (~360px wide)
+  const offscreen = useRef(null)
+  const detectionWorker = useRef(null)
+  const detectionRequest = useRef(0)
+  // Flag: true while an async detection pass is running (prevents re-entrancy)
+  const isDetecting = useRef(false)
+  // Timestamp of the last detection kick-off (ms) — used for throttling
+  const lastDetectTime = useRef(0)
+  const activeCornersRef = useRef(null)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -252,6 +260,23 @@ export default function App() {
   useEffect(() => {
     pagesRef.current = pages
   }, [pages])
+
+  useEffect(() => {
+    const worker = new Worker(`${import.meta.env.BASE_URL}detection-worker.js`)
+    detectionWorker.current = worker
+    worker.onmessage = ({ data }) => {
+      if (data.id !== detectionRequest.current) return
+      activeCornersRef.current = data.points?.map(p => ({
+        x: p.x / data.width,
+        y: p.y / data.height,
+      })) ?? null
+      isDetecting.current = false
+    }
+    worker.onerror = () => {
+      isDetecting.current = false
+    }
+    return () => worker.terminate()
+  }, [])
 
   useEffect(() => () => {
     pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
@@ -294,10 +319,18 @@ export default function App() {
 
   async function startCamera() {
     activeCornersRef.current = null
+    isDetecting.current = false
+    detectionRequest.current++
+    lastDetectTime.current = 0
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 60, min: 30 },
+        },
         audio: false
       })
       stream.current = s
@@ -314,43 +347,76 @@ export default function App() {
   function drawLive() {
     const v = video.current, o = live.current
     if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
-    const max = 700, scale = Math.min(1, max / v.videoWidth)
-    const w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale)
-    if (o.width !== w) { o.width = w; o.height = h }
+
+    // Size the overlay canvas to match the displayed video element (CSS pixels)
+    const dispW = v.clientWidth || v.offsetWidth || 700
+    const dispH = v.clientHeight || v.offsetHeight || Math.round(dispW * v.videoHeight / (v.videoWidth || 1))
+    if (o.width !== dispW || o.height !== dispH) { o.width = dispW; o.height = dispH }
+
     const c = o.getContext('2d')
-    c.drawImage(v, 0, 0, w, h)
-    try {
-      const pts = findOptimalCorners(o)
-      if (pts) {
-        activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
-        c.strokeStyle = '#10b981'
-        c.lineWidth = 4
-        c.beginPath()
-        c.moveTo(pts[0].x, pts[0].y)
-        c.lineTo(pts[1].x, pts[1].y)
-        c.lineTo(pts[2].x, pts[2].y)
-        c.lineTo(pts[3].x, pts[3].y)
-        c.closePath()
-        c.stroke()
+    // Clear overlay — the <video> element renders the live feed natively at 60 FPS
+    c.clearRect(0, 0, o.width, o.height)
 
-        c.fillStyle = 'rgba(16, 185, 129, 0.12)'
-        c.fill()
+    // Throttled detection: kick off an async detection pass at most every 80ms (~12 fps)
+    const now = performance.now()
+    if (!isDetecting.current && now - lastDetectTime.current > 80) {
+      lastDetectTime.current = now
+      isDetecting.current = true
 
-        for (const pt of pts) {
-          c.fillStyle = '#ffffff'
-          c.beginPath()
-          c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
-          c.fill()
-          c.strokeStyle = '#10b981'
-          c.lineWidth = 2
-          c.stroke()
-        }
-      } else {
-        activeCornersRef.current = null
-      }
-    } catch {
-      activeCornersRef.current = null
+      // Prepare / size the offscreen detection canvas (~360px wide)
+      const DETECT_MAX = 360
+      const detScale = Math.min(1, DETECT_MAX / v.videoWidth)
+      const dw = Math.round(v.videoWidth * detScale)
+      const dh = Math.round(v.videoHeight * detScale)
+      if (!offscreen.current) offscreen.current = document.createElement('canvas')
+      const oc = offscreen.current
+      if (oc.width !== dw || oc.height !== dh) { oc.width = dw; oc.height = dh }
+      const context = oc.getContext('2d')
+      context.drawImage(v, 0, 0, dw, dh)
+      const id = ++detectionRequest.current
+      const imageData = context.getImageData(0, 0, dw, dh)
+      detectionWorker.current?.postMessage({
+        id,
+        width: dw,
+        height: dh,
+        imageData,
+      }, [imageData.data.buffer])
     }
+
+    // Draw the overlay (document boundary) using the most recently detected corners
+    const normalizedPts = activeCornersRef.current
+    if (normalizedPts) {
+      const coverScale = Math.max(o.width / v.videoWidth, o.height / v.videoHeight)
+      const offsetX = (o.width - v.videoWidth * coverScale) / 2
+      const offsetY = (o.height - v.videoHeight * coverScale) / 2
+      const pts = normalizedPts.map(p => ({
+        x: offsetX + p.x * v.videoWidth * coverScale,
+        y: offsetY + p.y * v.videoHeight * coverScale,
+      }))
+      c.strokeStyle = '#10b981'
+      c.lineWidth = 4
+      c.beginPath()
+      c.moveTo(pts[0].x, pts[0].y)
+      c.lineTo(pts[1].x, pts[1].y)
+      c.lineTo(pts[2].x, pts[2].y)
+      c.lineTo(pts[3].x, pts[3].y)
+      c.closePath()
+      c.stroke()
+
+      c.fillStyle = 'rgba(16, 185, 129, 0.12)'
+      c.fill()
+
+      for (const pt of pts) {
+        c.fillStyle = '#ffffff'
+        c.beginPath()
+        c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
+        c.fill()
+        c.strokeStyle = '#10b981'
+        c.lineWidth = 2
+        c.stroke()
+      }
+    }
+
     frame.current = requestAnimationFrame(drawLive)
   }
 
@@ -370,21 +436,24 @@ export default function App() {
       let detectionGood = false
 
       try {
-        const max = 700, scale = Math.min(1, max / c.width)
-        const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
+        const DETECT_MAX = 700
+        const detScale = Math.min(1, DETECT_MAX / c.width)
+        const dw = Math.round(c.width * detScale)
+        const dh = Math.round(c.height * detScale)
         const dc = document.createElement('canvas')
         dc.width = dw; dc.height = dh
         dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
 
         const scaledPoints = findOptimalCorners(dc)
         if (scaledPoints) {
-          points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+          // Scale from offscreen coords back to full video resolution
+          points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
           detectionGood = true
-        } else if (activeCornersRef.current?.pts) {
-          const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
-          const scaleX = c.width / previewWidth
-          const scaleY = c.height / previewHeight
-          points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
+        } else if (activeCornersRef.current) {
+          points = activeCornersRef.current.map(p => ({
+            x: p.x * c.width,
+            y: p.y * c.height,
+          }))
           detectionGood = true
         }
         if (points) out = customExtract(c, points)
