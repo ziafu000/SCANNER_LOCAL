@@ -7,6 +7,7 @@ const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
 const urlOf = blob => URL.createObjectURL(blob)
 const label = (time) => new Date(time).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
+const defaultDocName = () => `Tài liệu ${label(Date.now())}`
 
 function canvasFilter(source, kind) {
   const c = document.createElement('canvas'), ctx = c.getContext('2d')
@@ -200,14 +201,28 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
   // draft: { blob, url, raw (objectURL of original capture), cropped (objectURL of perspective-corrected unfiltered), points }
+  // draft is only used on the 'adjust' screen now
   const [draft, setDraft] = useState(null)
   const [pages, setPages] = useState([])
   const [filter, setFilter] = useState('color')
   const [gallery, setGallery] = useState([])
   const [drag, setDrag] = useState(null)
+  // Document name for the current cart session
+  const [docName, setDocName] = useState(defaultDocName)
+  // Toast message
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef(null)
+  // For gallery view mode (read-only pages)
+  const [viewRecord, setViewRecord] = useState(null)
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
+
+  const showToast = (msg) => {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 2200)
+  }
 
   useEffect(() => {
     refreshGallery()
@@ -287,6 +302,8 @@ export default function App() {
 
     let out = null
     let points = null
+    let detectionGood = false // true if we found a clean 4-corner quad
+
     try {
       const max = 700, scale = Math.min(1, max / c.width)
       const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
@@ -297,6 +314,7 @@ export default function App() {
       const scaledPoints = findOptimalCorners(dc)
       if (scaledPoints) {
         points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+        detectionGood = true
       } else if (activeCornersRef.current?.pts) {
         // High-res detection failed but the live preview had a visible green box —
         // scale those preview-space corners up to the full-resolution canvas.
@@ -304,8 +322,11 @@ export default function App() {
         const scaleX = c.width / previewWidth
         const scaleY = c.height / previewHeight
         points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
+        detectionGood = true
       } else {
+        // No detection at all — use fitPoints and send to adjust screen
         points = fitPoints(c.width, c.height)
+        detectionGood = false
       }
       out = customExtract(c, points)
     } catch { /* fallback below */ }
@@ -317,16 +338,28 @@ export default function App() {
     const filtered = canvasFilter(out, 'color')
     const filteredBlob = await blobFrom(filtered)
 
-    setDraft({
+    const draftData = {
       blob: filteredBlob,
       url: urlOf(filteredBlob),
       raw: urlOf(rawBlob),
       cropped: urlOf(croppedBlob),
       points: points || fitPoints(c.width, c.height),
-    })
-    setFilter('color')
-    setScreen('review')
-    setStatus('Kiểm tra trang quét')
+    }
+
+    if (detectionGood) {
+      // Auto-add to cart and stay on camera
+      setPages(p => [...p, { ...draftData, id: uid() }])
+      showToast(`Đã thêm trang ${pages.length + 1}`)
+      setFilter('color')
+      setStatus('Đưa tờ giấy vào khung xanh')
+      setTimeout(startCamera, 100)
+    } else {
+      // Detection failed — go to adjust screen so user can fix corners
+      setDraft(draftData)
+      setFilter('color')
+      setScreen('adjust')
+      setStatus('Chỉnh lại 4 góc')
+    }
   }
 
   async function applyManual() {
@@ -342,13 +375,23 @@ export default function App() {
     const filtered = canvasFilter(out, filter)
     const filteredBlob = await blobFrom(filtered)
 
-    setDraft(d => ({
-      ...d,
+    const newPage = {
+      ...draft,
       blob: filteredBlob,
       url: urlOf(filteredBlob),
       cropped: urlOf(croppedBlob),
-    }))
-    setScreen('review')
+      id: uid(),
+    }
+
+    setPages(p => {
+      const updated = [...p, newPage]
+      showToast(`Đã thêm trang ${updated.length}`)
+      return updated
+    })
+    setDraft(null)
+    setScreen('camera')
+    setStatus('Đưa tờ giấy vào khung xanh')
+    setTimeout(startCamera, 100)
   }
 
   // Re-apply filter from the cropped (perspective-corrected, unfiltered) source
@@ -362,26 +405,6 @@ export default function App() {
     setDraft(d => ({ ...d, blob: b, url: urlOf(b) }))
   }
 
-  const addPage = () => {
-    setPages(p => [...p, { ...draft, id: uid() }])
-    setDraft(null)
-    setScreen('camera')
-    setTimeout(startCamera, 100)
-  }
-
-  async function shareDraft() {
-    const file = new File([draft.blob], 'scan.jpg', { type: 'image/jpeg' })
-    try {
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ title: 'SCANNER', files: [file] })
-      } else {
-        download(draft.blob, 'scan.jpg')
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') setError('Không thể chia sẻ lúc này. Bạn vẫn có thể lưu ảnh.')
-    }
-  }
-
   const download = (blob, name) => {
     const a = document.createElement('a')
     a.href = urlOf(blob)
@@ -390,13 +413,13 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(a.href), 500)
   }
 
-  async function exportPdf() {
-    const items = draft ? [...pages, { ...draft, id: uid() }] : pages
-    if (!items.length) return
+  // Export PDF from the current cart (pages[]) and save to gallery
+  async function exportCartPdf() {
+    if (!pages.length) return
     setStatus('Đang tạo PDF…')
     let pdf = null
-    for (let i = 0; i < items.length; i++) {
-      const im = await loadImage(items[i].url)
+    for (let i = 0; i < pages.length; i++) {
+      const im = await loadImage(pages[i].url)
       const imgWidth = im.naturalWidth || im.width
       const imgHeight = im.naturalHeight || im.height
       const orientation = imgWidth > imgHeight ? 'l' : 'p'
@@ -411,34 +434,49 @@ export default function App() {
       } else {
         pdf.addPage([imgWidth, imgHeight], orientation)
       }
-      pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
+      pdf.addImage(pages[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
     }
     const b = pdf.output('blob')
-    download(b, `SCANNER-${Date.now()}.pdf`)
+    const name = docName.trim() || defaultDocName()
+    download(b, `${name}.pdf`)
 
     const record = {
       id: uid(),
-      name: `Tài liệu ${label(Date.now())}`,
+      name,
       createdAt: Date.now(),
-      pages: items.map(x => x.blob),
+      pages: pages.map(x => x.blob),
     }
     await putScan(record)
     await refreshGallery()
-    setDraft(null); setPages([]); setScreen('camera')
+    setPages([])
+    setDocName(defaultDocName())
+    setScreen('camera')
     setStatus('Đã lưu PDF trong Thư viện')
     setTimeout(startCamera, 100)
   }
 
-  async function saveImage() {
-    const record = {
-      id: uid(),
-      name: `Trang quét ${label(Date.now())}`,
-      createdAt: Date.now(),
-      pages: [draft.blob],
+  // Export PDF from a gallery record (view-only)
+  async function exportRecordPdf(record) {
+    if (!record?.pages?.length) return
+    setStatus('Đang tạo PDF…')
+    let pdf = null
+    const items = record.pages.map(blob => ({ blob, url: urlOf(blob) }))
+    for (let i = 0; i < items.length; i++) {
+      const im = await loadImage(items[i].url)
+      const imgWidth = im.naturalWidth || im.width
+      const imgHeight = im.naturalHeight || im.height
+      const orientation = imgWidth > imgHeight ? 'l' : 'p'
+      if (i === 0) {
+        pdf = new jsPDF({ orientation, unit: 'px', format: [imgWidth, imgHeight], hotfixes: ['px_scaling'] })
+      } else {
+        pdf.addPage([imgWidth, imgHeight], orientation)
+      }
+      pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
+      URL.revokeObjectURL(items[i].url)
     }
-    await putScan(record)
-    await refreshGallery()
-    download(draft.blob, 'SCANNER.jpg')
+    const b = pdf.output('blob')
+    download(b, `${record.name}.pdf`)
+    setStatus('Sẵn sàng quét')
   }
 
   function movePage(from, to) {
@@ -446,10 +484,13 @@ export default function App() {
     setPages(p => { const n = [...p]; const [x] = n.splice(from, 1); n.splice(to, 0, x); return n })
   }
 
+  function removePage(idx) {
+    setPages(p => p.filter((_, i) => i !== idx))
+  }
+
   async function openRecord(r) {
-    setPages(r.pages.map((blob, i) => ({ id: `${r.id}-${i}`, blob, url: urlOf(blob) })))
-    setDraft(null)
-    setScreen('pages')
+    setViewRecord(r)
+    setScreen('gallery-view')
   }
 
   /* ───────── Gallery Screen ───────── */
@@ -485,66 +526,104 @@ export default function App() {
     </main>
   )
 
-  /* ───────── Pages (multi-page reorder) Screen ───────── */
-  if (screen === 'pages') return (
-    <main className="safe min-h-full bg-slate-950 p-5">
-      <Header back={() => { setScreen('camera'); startCamera() }} title={`PDF: ${pages.length} trang`} />
-      <p className="mb-4 text-slate-300">Giữ và kéo để sắp xếp, hoặc dùng mũi tên.</p>
-      <div className="space-y-3">
-        {pages.map((p, i) => (
-          <div draggable onDragStart={() => setDrag(i)} onDragOver={e => e.preventDefault()} onDrop={() => { movePage(drag, i); setDrag(null) }}
-            key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
-            <img src={p.url} className="h-24 w-18 rounded object-cover" />
-            <b className="flex-1 text-xl">Trang {i + 1}</b>
-            <div>
-              <button className="tap block text-2xl" onClick={() => movePage(i, i - 1)}>↑</button>
-              <button className="tap block text-2xl" onClick={() => movePage(i, i + 1)}>↓</button>
+  /* ───────── Gallery View Screen (read-only record viewer) ───────── */
+  if (screen === 'gallery-view') {
+    const rec = viewRecord
+    const recPages = rec ? rec.pages.map((blob, i) => ({ id: `${rec.id}-${i}`, blob, url: urlOf(blob) })) : []
+    return (
+      <main className="safe min-h-full bg-slate-950 p-5">
+        <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
+        <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
+        <div className="space-y-3">
+          {recPages.map((p, i) => (
+            <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
+              <img src={p.url} className="h-24 w-18 rounded object-cover" />
+              <b className="flex-1 text-xl">Trang {i + 1}</b>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
+        <button className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+          onClick={() => exportRecordPdf(rec)}>
+          Xuất PDF lại
+        </button>
+      </main>
+    )
+  }
+
+  /* ───────── Cart Screen (active scan session) ───────── */
+  if (screen === 'cart') return (
+    <main className="safe min-h-full bg-slate-950 p-5">
+      <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
+      {/* Editable document name */}
+      <div className="mb-4">
+        <label className="mb-1 block text-sm text-slate-400">Tên tài liệu</label>
+        <input
+          className="w-full rounded-xl bg-slate-800 px-4 py-3 text-lg font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+          value={docName}
+          onChange={e => setDocName(e.target.value)}
+          placeholder="Nhập tên tài liệu…"
+        />
       </div>
-      <button className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950" onClick={exportPdf}>
-        Xuất PDF
-      </button>
+      {pages.length === 0 ? (
+        <div className="rounded-3xl border-2 border-dashed border-slate-600 p-10 text-center text-xl text-slate-300">
+          Chưa có trang nào trong giỏ.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {pages.map((p, i) => (
+            <div
+              draggable
+              onDragStart={() => setDrag(i)}
+              onDragOver={e => e.preventDefault()}
+              onDrop={() => { movePage(drag, i); setDrag(null) }}
+              key={p.id}
+              className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3"
+            >
+              <img src={p.url} className="h-24 w-18 rounded object-cover" />
+              <b className="flex-1 text-xl">Trang {i + 1}</b>
+              <div className="flex flex-col gap-1">
+                <button className="tap text-2xl" onClick={() => movePage(i, i - 1)}>↑</button>
+                <button className="tap text-2xl" onClick={() => movePage(i, i + 1)}>↓</button>
+              </div>
+              <button
+                aria-label="Xóa trang"
+                className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl"
+                onClick={() => removePage(i)}
+              >
+                🗑
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {pages.length > 0 && (
+        <button
+          className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+          onClick={exportCartPdf}
+        >
+          Xong &amp; Xuất PDF
+        </button>
+      )}
     </main>
   )
 
-  /* ───────── Review / Adjust Screen ───────── */
-  if (screen === 'review' || screen === 'adjust') return (
+  /* ───────── Adjust Screen ───────── */
+  if (screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
-      <Header back={() => { setScreen('camera'); startCamera() }} title={screen === 'adjust' ? 'Chỉnh 4 góc' : 'Trang vừa quét'} />
-      {screen === 'adjust'
-        ? <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
-        : <img className="paper-shadow mx-auto max-h-[57vh] rounded bg-white" src={draft.url} alt="Trang vừa quét" />
-      }
-      {screen === 'adjust' ? (
-        <button className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950" onClick={applyManual}>
-          Áp dụng 4 góc
-        </button>
-      ) : (
-        <>
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            {[['color', 'Màu'], ['gray', 'Xám'], ['bw', 'Đen trắng']].map(([k, n]) => (
-              <button key={k} onClick={() => changeFilter(k)}
-                className={`tap rounded-xl border-2 p-2 font-bold ${filter === k ? 'border-emerald-300 bg-emerald-300 text-slate-950' : 'border-slate-500'}`}>
-                {n}
-              </button>
-            ))}
-          </div>
-          <button onClick={() => setScreen('adjust')}
-            className="tap mt-3 w-full rounded-2xl border-2 border-slate-400 p-3 text-lg font-bold">
-            Chỉnh lại 4 góc
+      <Header back={() => { setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+      <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
+      {/* Filter selection while adjusting */}
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        {[['color', 'Màu'], ['gray', 'Xám'], ['bw', 'Đen trắng']].map(([k, n]) => (
+          <button key={k} onClick={() => setFilter(k)}
+            className={`tap rounded-xl border-2 p-2 font-bold ${filter === k ? 'border-emerald-300 bg-emerald-300 text-slate-950' : 'border-slate-500'}`}>
+            {n}
           </button>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <button onClick={shareDraft} className="tap rounded-2xl bg-sky-400 p-3 text-lg font-black text-slate-950">Chia sẻ</button>
-            <button onClick={saveImage} className="tap rounded-2xl bg-slate-200 p-3 text-lg font-black text-slate-950">Lưu ảnh</button>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <button onClick={addPage} className="tap rounded-2xl bg-slate-700 p-3 text-lg font-black">Thêm trang</button>
-            <button onClick={exportPdf} className="tap rounded-2xl bg-emerald-400 p-3 text-lg font-black text-slate-950">Xong → PDF</button>
-          </div>
-        </>
-      )}
+        ))}
+      </div>
+      <button className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950" onClick={applyManual}>
+        Áp dụng 4 góc
+      </button>
     </main>
   )
 
@@ -556,7 +635,17 @@ export default function App() {
           <h1 className="text-2xl font-black tracking-wide">SCANNER</h1>
           <p className="text-sm text-emerald-300">{status}</p>
         </div>
-        <button onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold">Thư viện</button>
+        <div className="flex gap-2">
+          {pages.length > 0 && (
+            <button
+              onClick={() => { stopped(); setScreen('cart') }}
+              className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300"
+            >
+              🛒 {pages.length} trang
+            </button>
+          )}
+          <button onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold">Thư viện</button>
+        </div>
       </header>
       <div className="relative mx-3 mt-4 flex-1 overflow-hidden rounded-3xl bg-black">
         <video ref={video} playsInline muted className="h-full w-full object-cover" />
@@ -567,11 +656,16 @@ export default function App() {
             <button onClick={startCamera} className="tap mt-3 rounded-xl bg-emerald-400 px-5 py-2 font-black text-slate-950">Thử lại</button>
           </div>
         )}
+        {/* Toast notification */}
+        {toast && (
+          <div className="pointer-events-none absolute inset-x-6 bottom-6 flex justify-center">
+            <span className="rounded-2xl bg-emerald-400 px-5 py-3 text-lg font-black text-slate-950 shadow-lg">
+              {toast}
+            </span>
+          </div>
+        )}
       </div>
       <div className="p-5 text-center">
-        {pages.length > 0 && (
-          <p className="mb-2 text-lg font-bold text-emerald-300">Đang quét: {pages.length} trang</p>
-        )}
         <p className="mb-3 text-lg font-semibold">Đặt giấy vào khung, rồi bấm nút tròn</p>
         <button disabled={!ready} onClick={capture} aria-label="Chụp tài liệu"
           className="tap mx-auto grid h-24 w-24 place-items-center rounded-full border-8 border-white bg-emerald-400 shadow-lg disabled:opacity-50">
