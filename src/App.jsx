@@ -267,12 +267,10 @@ export default function App() {
         c.lineTo(pts[3].x, pts[3].y)
         c.closePath()
         c.stroke()
-      } else {
-        activeCornersRef.current = null
-        const marked = scan.current.highlightPaper(o, { color: '#20e3a2', thickness: 7 })
-        c.drawImage(marked, 0, 0, w, h)
       }
-    } catch { /* detection can fail occasionally */ }
+    } catch {
+      activeCornersRef.current = null
+    }
     frame.current = requestAnimationFrame(drawLive)
   }
 
@@ -624,4 +622,3 @@ function Adjust({ image, points, setPoints }) {
     </div>
   )
 }
-
