@@ -5,11 +5,11 @@
 - **Goal:** Single-file/multi-page scanning utility with focus on iPhone Safari iOS. Simple, fast, no external dependencies (authentication/storage).
 - **Project Structure:**
   - `public/`: Assets, OpenCV, icons, manifest/PWA icons.
-  - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Adjust/Cart -> Gallery/Pages.
+  - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Confirm/Adjust -> Cart -> Gallery/View.
   - `db.js`: IndexedDB wrapper for local gallery.
 - **Workflow:**
   - Camera preview uses camera stream -> `requestAnimationFrame` -> `jscanify`.
-  - Capture -> `canvas` -> `extractPaper` (OpenCV perspective warp) -> Filter (custom image processing).
+  - Capture -> `canvas` -> `extractPaper` (OpenCV perspective warp) -> Filter (custom image processing) -> user confirmation -> Cart.
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page -> `jspdf` generates blobs locally.
 - **PWA/Deployment:**
