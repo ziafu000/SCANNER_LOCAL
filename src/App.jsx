@@ -219,7 +219,7 @@ export default function App() {
   const isDetecting = useRef(false)
   // Timestamp of the last detection kick-off (ms) — used for throttling
   const lastDetectTime = useRef(0)
-  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (overlay coords)
+  const activeCornersRef = useRef(null)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -353,20 +353,11 @@ export default function App() {
         try {
           const rawPts = findOptimalCorners(oc)
           if (rawPts) {
-            // Scale detected points from offscreen coords to overlay (display) coords
-            const scaleToOverlay = { x: o.width / dw, y: o.height / dh }
-            const overlayPts = rawPts.map(p => ({
-              x: p.x * scaleToOverlay.x,
-              y: p.y * scaleToOverlay.y,
+            const normalizedPts = rawPts.map(p => ({
+              x: p.x / dw,
+              y: p.y / dh,
             }))
-            // Store with videoWidth/Height for use in capture()
-            activeCornersRef.current = {
-              pts: overlayPts,
-              previewWidth: o.width,
-              previewHeight: o.height,
-              videoWidth: v.videoWidth,
-              videoHeight: v.videoHeight,
-            }
+            activeCornersRef.current = normalizedPts
           } else {
             activeCornersRef.current = null
           }
@@ -379,9 +370,15 @@ export default function App() {
     }
 
     // Draw the overlay (document boundary) using the most recently detected corners
-    const corners = activeCornersRef.current
-    if (corners) {
-      const { pts } = corners
+    const normalizedPts = activeCornersRef.current
+    if (normalizedPts) {
+      const coverScale = Math.max(o.width / v.videoWidth, o.height / v.videoHeight)
+      const offsetX = (o.width - v.videoWidth * coverScale) / 2
+      const offsetY = (o.height - v.videoHeight * coverScale) / 2
+      const pts = normalizedPts.map(p => ({
+        x: offsetX + p.x * v.videoWidth * coverScale,
+        y: offsetY + p.y * v.videoHeight * coverScale,
+      }))
       c.strokeStyle = '#10b981'
       c.lineWidth = 4
       c.beginPath()
@@ -439,15 +436,11 @@ export default function App() {
           // Scale from offscreen coords back to full video resolution
           points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
           detectionGood = true
-        } else if (activeCornersRef.current?.pts) {
-          // Fall back to the last live-preview corners, scaled to full video resolution
-          const { pts: livePts, previewWidth, previewHeight, videoWidth: pvw, videoHeight: pvh } = activeCornersRef.current
-          // Use stored video dimensions when available for accuracy
-          const refW = pvw ?? previewWidth
-          const refH = pvh ?? previewHeight
-          const scaleX = c.width / refW
-          const scaleY = c.height / refH
-          points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
+        } else if (activeCornersRef.current) {
+          points = activeCornersRef.current.map(p => ({
+            x: p.x * c.width,
+            y: p.y * c.height,
+          }))
           detectionGood = true
         }
         if (points) out = customExtract(c, points)
