@@ -1,9 +1,10 @@
 # SCANNER
 
-SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào khung hình và bấm một nút lớn. Ứng dụng tự tìm mép giấy, kể cả biên lai nhỏ hoặc tờ giấy ở xa; khi viền xanh xuất hiện, ảnh chụp sẽ được cắt theo viền đó và tự thêm vào giỏ để tiếp tục quét. Nếu không tìm được mép giấy, ứng dụng cho phép chỉnh lại bốn góc trước khi thêm trang. Trong giỏ, bạn có thể đặt tên tài liệu, đổi thứ tự các trang rồi lưu và xuất PDF.
+SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào khung hình và bấm một nút lớn. Ứng dụng tự tìm mép giấy, kể cả biên lai nhỏ hoặc tờ giấy ở xa; khi viền xanh xuất hiện, ảnh chụp sẽ được cắt theo viền đó để bạn xem lại, xác nhận thêm vào giỏ hoặc chụp lại. Nếu không tìm được mép giấy, ứng dụng cho phép chỉnh lại bốn góc rồi xem lại trang trước khi xác nhận. Trong giỏ, bạn có thể xem ảnh toàn màn hình, đặt tên tài liệu, đổi thứ tự các trang rồi lưu và xuất PDF. Chế độ xem tài liệu trong thư viện cũng hỗ trợ xem từng trang toàn màn hình.
 
 - Ba chế độ: **Màu / Xám / Đen trắng**
-- Tự thêm ảnh cắt thành công vào giỏ; hỗ trợ chỉnh bốn góc khi cần
+- Xem lại ảnh đã cắt để xác nhận thêm vào giỏ hoặc chụp lại; hỗ trợ chỉnh bốn góc khi cần
+- Xem toàn màn hình từng trang trong giỏ và khi mở tài liệu từ thư viện
 - Đặt tên tài liệu, ghép, đổi thứ tự nhiều trang và xuất một PDF
 - Thư viện IndexedDB chỉ nằm trên thiết bị; không tài khoản, cloud, quảng cáo, OCR hay theo dõi
 - Giao diện PWA có thể mở ngoại tuyến sau lần tải đầu tiên; bộ quét cần tải OpenCV.js riêng. Camera cần được cấp quyền.
@@ -44,4 +45,4 @@ Cả hai dịch vụ cung cấp HTTPS, điều kiện bắt buộc của camera 
 
 ## English (short)
 
-SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, automatically adds successful scans to a cart, supports manual corner adjustment, and exports named multi-page PDFs. Its gallery stays local in IndexedDB. Install from iPhone Safari via **Share → Add to Home Screen**. No accounts, uploads, OCR, analytics, or trackers.
+SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, lets users review and confirm or retake each scan, supports manual corner adjustment, and exports named multi-page PDFs. Cart and gallery-document thumbnails open in a fullscreen preview. Its gallery stays local in IndexedDB. Install from iPhone Safari via **Share → Add to Home Screen**. No accounts, uploads, OCR, analytics, or trackers.
