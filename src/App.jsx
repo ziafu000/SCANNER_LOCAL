@@ -1,6 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import JScanify from 'jscanify/client'
 import { jsPDF } from 'jspdf'
+import {
+  Camera,
+  Layers,
+  FileText,
+  ChevronLeft,
+  RotateCcw,
+  Check,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  Download,
+  X,
+  Plus,
+  Sliders,
+  Sparkles,
+  RefreshCw,
+  FolderOpen
+} from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
@@ -305,8 +323,9 @@ export default function App() {
       const pts = findOptimalCorners(o)
       if (pts) {
         activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
-        c.strokeStyle = '#20e3a2'
-        c.lineWidth = 7
+        // Clean high-contrast emerald detection quad
+        c.strokeStyle = '#10b981'
+        c.lineWidth = 4
         c.beginPath()
         c.moveTo(pts[0].x, pts[0].y)
         c.lineTo(pts[1].x, pts[1].y)
@@ -314,6 +333,21 @@ export default function App() {
         c.lineTo(pts[3].x, pts[3].y)
         c.closePath()
         c.stroke()
+
+        // Subtle fill for feedback
+        c.fillStyle = 'rgba(16, 185, 129, 0.12)'
+        c.fill()
+
+        // Sleek corner markers
+        for (const pt of pts) {
+          c.fillStyle = '#ffffff'
+          c.beginPath()
+          c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
+          c.fill()
+          c.strokeStyle = '#10b981'
+          c.lineWidth = 2
+          c.stroke()
+        }
       } else {
         activeCornersRef.current = null
       }
@@ -336,7 +370,7 @@ export default function App() {
 
       let out = null
       let points = null
-      let detectionGood = false // true if we found a clean 4-corner quad
+      let detectionGood = false
 
       try {
         const max = 700, scale = Math.min(1, max / c.width)
@@ -561,20 +595,20 @@ export default function App() {
   /* ───────── Lightbox overlay (rendered on top of any screen) ───────── */
   const LightboxOverlay = lightbox ? (
     <div
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-2xl p-4 transition-all animate-in fade-in duration-200"
       onClick={() => setLightbox(null)}
     >
       <button
         onClick={() => setLightbox(null)}
-        className="absolute right-4 top-4 z-50 rounded-2xl bg-slate-800 px-5 py-3 text-lg font-black text-white"
+        className="absolute right-5 top-safe mt-4 z-50 flex h-11 w-11 items-center justify-center rounded-full glass-panel text-white active:scale-95 transition-all shadow-xl"
         aria-label="Đóng"
       >
-        Đóng
+        <X className="h-6 w-6 stroke-[2.5]" />
       </button>
       <img
         src={lightbox}
         onClick={e => e.stopPropagation()}
-        className="max-h-[90vh] max-w-[95vw] rounded-xl object-contain shadow-2xl"
+        className="max-h-[85vh] max-w-[92vw] rounded-2xl object-contain shadow-2xl ring-1 ring-white/10"
         alt="Xem ảnh"
       />
     </div>
@@ -584,31 +618,41 @@ export default function App() {
   if (screen === 'confirm') return (
     <>
       {LightboxOverlay}
-      <main className="safe flex min-h-full flex-col items-center bg-slate-950 p-5">
+      <main className="safe flex min-h-full flex-col justify-between bg-slate-950 p-5">
         <Header back={retakePage} title="Xem lại trang" />
-        <p className="mb-4 text-slate-300">Trang quét thành công. Xác nhận để thêm vào giỏ.</p>
-        {pendingPage && (
-          <img
-            src={pendingPage.url}
-            className="mb-6 max-h-[55vh] max-w-full cursor-zoom-in rounded-2xl object-contain shadow-lg"
-            alt="Trang đã quét"
-            onClick={() => setLightbox(pendingPage.url)}
-          />
-        )}
-        <div className="flex w-full gap-3">
+
+        <div className="flex flex-1 flex-col items-center justify-center my-2">
+          {pendingPage && (
+            <div className="relative group cursor-zoom-in" onClick={() => setLightbox(pendingPage.url)}>
+              <img
+                src={pendingPage.url}
+                className="max-h-[58vh] max-w-[88vw] rounded-2xl object-contain paper-shadow transition-transform active:scale-[0.99]"
+                alt="Trang đã quét"
+              />
+              <div className="absolute bottom-3 right-3 rounded-full glass-pill px-3 py-1.5 text-xs font-medium text-white/80 shadow-md backdrop-blur-md pointer-events-none">
+                Chạm để phóng to
+              </div>
+            </div>
+          )}
+          <p className="mt-4 text-sm font-medium text-slate-400">Trang quét thành công. Xác nhận để thêm vào giỏ.</p>
+        </div>
+
+        <div className="flex w-full gap-3 pt-2">
           <button
             disabled={processing}
-            className="tap flex-1 rounded-2xl border-2 border-slate-500 p-4 text-xl font-black text-slate-200 disabled:opacity-50"
+            className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl glass-panel py-4 text-lg font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
             onClick={retakePage}
           >
-            Chụp lại
+            <RotateCcw className="h-5 w-5" />
+            <span>Chụp lại</span>
           </button>
           <button
             disabled={processing}
-            className="tap flex-1 rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
+            className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
             onClick={confirmPage}
           >
-            Xác nhận thêm
+            <Check className="h-5 w-5 stroke-[2.5]" />
+            <span>Xác nhận thêm</span>
           </button>
         </div>
       </main>
@@ -617,29 +661,55 @@ export default function App() {
 
   /* ───────── Gallery Screen ───────── */
   if (screen === 'gallery') return (
-    <main className="safe min-h-full bg-slate-950 p-5">
-      <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện" />
-      <p className="mb-5 text-slate-300">Chỉ lưu trên điện thoại này. Không tải lên mạng.</p>
+    <main className="safe min-h-full bg-slate-950 p-5 flex flex-col">
+      <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện tài liệu" />
+      <p className="mb-5 text-sm text-slate-400">Tài liệu lưu cục bộ trên máy này. Riêng tư &amp; an toàn tuyệt đối.</p>
+
       {gallery.length === 0 ? (
-        <div className="rounded-3xl border-2 border-dashed border-slate-600 p-10 text-center text-xl text-slate-300">
-          Chưa có tài liệu nào.
-          <br />
-          <button className="mt-5 rounded-2xl bg-emerald-400 px-6 py-4 font-bold text-slate-950" onClick={() => { setScreen('camera'); startCamera() }}>
-            Quét trang đầu tiên
+        <div className="flex-1 flex flex-col items-center justify-center rounded-3xl border border-white/10 bg-slate-900/40 p-10 text-center backdrop-blur-xl">
+          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full glass-pill text-slate-400">
+            <FolderOpen className="h-8 w-8 stroke-[1.5]" />
+          </div>
+          <h3 className="text-xl font-bold text-white">Chưa có tài liệu nào</h3>
+          <p className="mt-2 text-sm text-slate-400 max-w-xs">Bắt đầu quét tài liệu đầu tiên bằng camera siêu nét.</p>
+          <button
+            className="mt-6 flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 px-6 py-3.5 font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
+            onClick={() => { setScreen('camera'); startCamera() }}
+          >
+            <Camera className="h-5 w-5" />
+            <span>Quét trang đầu tiên</span>
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 pb-8">
           {gallery.map(r => (
-            <div key={r.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
-              <div className="grid h-14 w-12 place-items-center rounded-lg bg-emerald-300 font-black text-slate-950">{r.pages.length}</div>
-              <button className="flex-1 text-left" onClick={() => openRecord(r)}>
-                <b className="block text-lg">{r.name}</b>
-                <span className="text-slate-300">{r.pages.length} trang · {label(r.createdAt)}</span>
+            <div
+              key={r.id}
+              className="group relative flex items-center gap-4 rounded-2xl glass-panel p-4 shadow-lg transition-all active:scale-[0.99]"
+            >
+              <div
+                className="flex flex-col items-center justify-center h-14 w-14 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex-shrink-0"
+              >
+                <span className="text-xl font-black">{r.pages.length}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider -mt-1">Trang</span>
+              </div>
+
+              <button className="flex-1 text-left min-w-0" onClick={() => openRecord(r)}>
+                <b className="block text-lg font-bold text-white truncate">{r.name}</b>
+                <span className="text-xs text-slate-400 mt-0.5 block">{label(r.createdAt)}</span>
               </button>
-              <button aria-label="Xóa" className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl"
-                onClick={async () => { if (confirm('Xóa tài liệu này khỏi điện thoại?')) { await removeScan(r.id); refreshGallery() } }}>
-                🗑
+
+              <button
+                aria-label="Xóa"
+                className="tap flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 active:scale-90 transition-all"
+                onClick={async () => {
+                  if (confirm('Xóa tài liệu này khỏi điện thoại?')) {
+                    await removeScan(r.id)
+                    refreshGallery()
+                  }
+                }}
+              >
+                <Trash2 className="h-5 w-5" />
               </button>
             </div>
           ))}
@@ -654,25 +724,40 @@ export default function App() {
     return (
       <>
         {LightboxOverlay}
-        <main className="safe min-h-full bg-slate-950 p-5">
-          <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
-          <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
-          <div className="space-y-3">
-            {viewedPages.map((p, i) => (
-              <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
-                <img
-                  src={p.url}
-                  className="h-24 w-18 cursor-zoom-in rounded object-cover"
+        <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
+          <div>
+            <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
+            <div className="mb-5 flex items-center justify-between text-xs text-slate-400 border-b border-white/5 pb-3">
+              <span>{rec?.pages.length ?? 0} trang tài liệu</span>
+              <span>{rec ? label(rec.createdAt) : ''}</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 max-h-[62vh] overflow-y-auto pr-1 pb-4">
+              {viewedPages.map((p, i) => (
+                <div
+                  key={p.id}
                   onClick={() => setLightbox(p.url)}
-                  alt={`Trang ${i + 1}`}
-                />
-                <b className="flex-1 text-xl">Trang {i + 1}</b>
-              </div>
-            ))}
+                  className="group relative cursor-zoom-in rounded-2xl glass-panel p-2.5 overflow-hidden transition-all active:scale-95"
+                >
+                  <img
+                    src={p.url}
+                    className="h-44 w-full rounded-xl object-cover shadow-inner"
+                    alt={`Trang ${i + 1}`}
+                  />
+                  <div className="absolute top-4 left-4 rounded-lg glass-pill px-2.5 py-1 text-xs font-bold text-white shadow-md">
+                    Trang {i + 1}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <button className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
-            onClick={() => exportRecordPdf(rec)}>
-            Xuất PDF lại
+
+          <button
+            className="tap mt-4 w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
+            onClick={() => exportRecordPdf(rec)}
+          >
+            <Download className="h-5 w-5 stroke-[2.5]" />
+            <span>Xuất lại file PDF</span>
           </button>
         </main>
       </>
@@ -683,134 +768,250 @@ export default function App() {
   if (screen === 'cart') return (
     <>
       {LightboxOverlay}
-      <main className="safe min-h-full bg-slate-950 p-5">
-        <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
-        {/* Editable document name */}
-        <div className="mb-4">
-          <label className="mb-1 block text-sm text-slate-400">Tên tài liệu</label>
-          <input
-            className="w-full rounded-xl bg-slate-800 px-4 py-3 text-lg font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
-            value={docName}
-            onChange={e => setDocName(e.target.value)}
-            placeholder="Nhập tên tài liệu…"
-          />
-        </div>
-        {pages.length === 0 ? (
-          <div className="rounded-3xl border-2 border-dashed border-slate-600 p-10 text-center text-xl text-slate-300">
-            Chưa có trang nào trong giỏ.
+      <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
+        <div>
+          <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
+
+          {/* Editable document name input */}
+          <div className="mb-5">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Tên tài liệu xuất</label>
+            <div className="relative">
+              <input
+                className="w-full rounded-2xl glass-panel px-4 py-3.5 text-base font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition-all"
+                value={docName}
+                onChange={e => setDocName(e.target.value)}
+                placeholder="Nhập tên tài liệu…"
+              />
+            </div>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {pages.map((p, i) => (
-              <div
-                draggable={!processing}
-                onDragStart={() => setDrag(i)}
-                onDragOver={e => e.preventDefault()}
-                onDrop={() => { movePage(drag, i); setDrag(null) }}
-                key={p.id}
-                className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3"
-              >
-                <img
-                  src={p.url}
-                  className="h-24 w-18 cursor-zoom-in rounded object-cover"
-                  onClick={() => setLightbox(p.url)}
-                  alt={`Trang ${i + 1}`}
-                />
-                <b className="flex-1 text-xl">Trang {i + 1}</b>
-                <div className="flex flex-col gap-1">
-                  <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i - 1)}>↑</button>
-                  <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i + 1)}>↓</button>
-                </div>
-                <button
-                  aria-label="Xóa trang"
-                  disabled={processing}
-                  className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl disabled:opacity-50"
-                  onClick={() => removePage(i)}
+
+          {pages.length === 0 ? (
+            <div className="rounded-3xl border border-white/10 bg-slate-900/40 p-10 text-center backdrop-blur-xl">
+              <Layers className="mx-auto h-12 w-12 text-slate-500 stroke-[1.5] mb-3" />
+              <p className="text-lg font-semibold text-slate-300">Chưa có trang nào trong giỏ</p>
+              <p className="mt-1 text-sm text-slate-400">Bấm chụp tiếp để quét các trang tài liệu.</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[54vh] overflow-y-auto pr-1 pb-4">
+              {pages.map((p, i) => (
+                <div
+                  draggable={!processing}
+                  onDragStart={() => setDrag(i)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => { movePage(drag, i); setDrag(null) }}
+                  key={p.id}
+                  className="flex items-center gap-3 rounded-2xl glass-panel p-3 shadow-md transition-all"
                 >
-                  🗑
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {pages.length > 0 && (
+                  <img
+                    src={p.url}
+                    className="h-20 w-16 cursor-zoom-in rounded-xl object-cover ring-1 ring-white/10 active:scale-95 transition-transform"
+                    onClick={() => setLightbox(p.url)}
+                    alt={`Trang ${i + 1}`}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <b className="block text-base font-bold text-white">Trang {i + 1}</b>
+                    <span className="text-xs text-slate-400">Kéo thả hoặc bấm mũi tên để xếp</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      disabled={processing || i === 0}
+                      className="tap flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-slate-300 active:scale-90 transition-all disabled:opacity-30"
+                      onClick={() => movePage(i, i - 1)}
+                      aria-label="Di chuyển lên"
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </button>
+                    <button
+                      disabled={processing || i === pages.length - 1}
+                      className="tap flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-slate-300 active:scale-90 transition-all disabled:opacity-30"
+                      onClick={() => movePage(i, i + 1)}
+                      aria-label="Di chuyển xuống"
+                    >
+                      <ArrowDown className="h-4 w-4" />
+                    </button>
+                    <button
+                      aria-label="Xóa trang"
+                      disabled={processing}
+                      className="tap flex h-9 w-9 items-center justify-center rounded-xl bg-red-500/10 text-red-400 active:scale-90 transition-all disabled:opacity-30 ml-1"
+                      onClick={() => removePage(i)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2.5 pt-4">
+          {pages.length > 0 && (
+            <button
+              disabled={processing}
+              className="tap flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+              onClick={exportCartPdf}
+            >
+              <Download className="h-5 w-5 stroke-[2.5]" />
+              <span>Xong &amp; Xuất PDF ({pages.length} trang)</span>
+            </button>
+          )}
           <button
             disabled={processing}
-            className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
-            onClick={exportCartPdf}
+            className="tap flex w-full items-center justify-center gap-2 rounded-2xl glass-panel py-3.5 text-base font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
+            onClick={() => { setScreen('camera'); startCamera() }}
           >
-            Xong &amp; Xuất PDF
+            <Camera className="h-5 w-5" />
+            <span>Chụp thêm trang</span>
           </button>
-        )}
+        </div>
       </main>
     </>
   )
 
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
-    <main className="safe min-h-full bg-slate-950 p-4">
-      <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
-      <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
-      {error && <p className="mt-3 rounded-xl bg-red-950 p-3 text-red-200">{error}</p>}
-      {/* Filter selection while adjusting */}
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        {[['color', 'Màu'], ['gray', 'Xám'], ['bw', 'Đen trắng']].map(([k, n]) => (
-          <button key={k} onClick={() => setFilter(k)}
-            className={`tap rounded-xl border-2 p-2 font-bold ${filter === k ? 'border-emerald-300 bg-emerald-300 text-slate-950' : 'border-slate-500'}`}>
-            {n}
-          </button>
-        ))}
+    <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
+      <div>
+        <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+        <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
+        {error && <p className="mt-3 rounded-2xl bg-red-950/80 border border-red-500/30 p-3 text-sm text-red-200">{error}</p>}
+
+        {/* Filter selection pills */}
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {[
+            ['color', 'Ảnh gốc'],
+            ['gray', 'Xám rõ nét'],
+            ['bw', 'Đen trắng']
+          ].map(([k, n]) => (
+            <button
+              key={k}
+              onClick={() => setFilter(k)}
+              className={`tap rounded-xl py-3 px-2 text-sm font-bold transition-all active:scale-95 ${
+                filter === k
+                  ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
+                  : 'glass-panel text-slate-300'
+              }`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
       </div>
-      <button disabled={processing} className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50" onClick={applyManual}>
-        Áp dụng 4 góc
+
+      <button
+        disabled={processing}
+        className="tap mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+        onClick={applyManual}
+      >
+        <Check className="h-5 w-5 stroke-[2.5]" />
+        <span>Áp dụng 4 góc &amp; Cắt</span>
       </button>
     </main>
   )
 
   /* ───────── Camera Screen (default) ───────── */
   return (
-    <main className="safe flex min-h-full flex-col bg-slate-950">
-      <header className="flex items-center justify-between px-5">
-        <div>
-          <h1 className="text-2xl font-black tracking-wide">SCANNER</h1>
-          <p className="text-sm text-emerald-300">{status}</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            disabled={processing}
-            onClick={() => { stopped(); setScreen('cart') }}
-            className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300 disabled:opacity-50"
-          >
-            🛒 {pages.length} trang
-          </button>
-          <button disabled={processing} onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold disabled:opacity-50">Thư viện</button>
+    <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
+      {/* Top Floating Glass Capsule Bar */}
+      <header className="px-4 pt-1 pb-2">
+        <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-400/20 text-emerald-400 border border-emerald-400/30">
+              <Camera className="h-4 w-4" />
+            </div>
+            <div>
+              <h1 className="text-base font-extrabold tracking-tight text-white leading-none">SCANNER</h1>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <p className="text-[11px] font-medium text-emerald-400">{status}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              disabled={processing}
+              onClick={() => { stopped(); setScreen('cart') }}
+              className="tap flex items-center gap-1.5 rounded-xl bg-emerald-400/15 border border-emerald-400/30 px-3 py-1.5 text-xs font-bold text-emerald-300 active:scale-95 transition-all disabled:opacity-50"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>{pages.length} trang</span>
+            </button>
+
+            <button
+              disabled={processing}
+              onClick={() => { stopped(); setScreen('gallery') }}
+              className="tap flex items-center justify-center rounded-xl glass-pill h-8 w-8 text-slate-200 active:scale-95 transition-all disabled:opacity-50"
+              aria-label="Thư viện"
+            >
+              <FolderOpen className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </header>
-      <div className="relative mx-3 mt-4 flex-1 overflow-hidden rounded-3xl bg-black">
+
+      {/* Viewfinder with optical bracket markers */}
+      <div className="relative mx-4 my-1 flex-1 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
         <video ref={video} playsInline muted className="h-full w-full object-cover" />
         <canvas ref={live} className="absolute inset-0 h-full w-full object-fill" />
+
+        {/* Optical Viewfinder L-brackets overlay */}
+        <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
+          <div className="flex justify-between">
+            <div className="h-6 w-6 border-t-2 border-l-2 border-white/70 rounded-tl-sm" />
+            <div className="h-6 w-6 border-t-2 border-r-2 border-white/70 rounded-tr-sm" />
+          </div>
+          <div className="flex justify-between">
+            <div className="h-6 w-6 border-b-2 border-l-2 border-white/70 rounded-bl-sm" />
+            <div className="h-6 w-6 border-b-2 border-r-2 border-white/70 rounded-br-sm" />
+          </div>
+        </div>
+
         {error && (
-          <div className="absolute inset-x-3 top-3 rounded-2xl bg-slate-950/95 p-4 text-center text-lg">
-            <p>{error}</p>
-            <button onClick={startCamera} className="tap mt-3 rounded-xl bg-emerald-400 px-5 py-2 font-black text-slate-950">Thử lại</button>
+          <div className="absolute inset-x-4 top-4 rounded-2xl glass-panel p-4 text-center text-sm shadow-xl backdrop-blur-2xl">
+            <p className="text-slate-200">{error}</p>
+            <button
+              onClick={startCamera}
+              className="tap mt-3 inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-bold text-slate-950 active:scale-95 transition-all"
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Thử lại</span>
+            </button>
           </div>
         )}
-        {/* Toast notification */}
+
+        {/* Toast notification capsule */}
         {toast && (
-          <div className="pointer-events-none absolute inset-x-6 bottom-6 flex justify-center">
-            <span className="rounded-2xl bg-emerald-400 px-5 py-3 text-lg font-black text-slate-950 shadow-lg">
-              {toast}
-            </span>
+          <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center animate-in fade-in slide-in-from-bottom-3 duration-200">
+            <div className="flex items-center gap-2 rounded-full glass-panel px-5 py-2.5 text-sm font-bold text-emerald-400 shadow-2xl border border-emerald-400/30">
+              <Check className="h-4 w-4 stroke-[3]" />
+              <span>{toast}</span>
+            </div>
           </div>
         )}
       </div>
-      <div className="p-5 text-center">
-        <p className="mb-3 text-lg font-semibold">Đặt giấy vào khung, rồi bấm nút tròn</p>
-        <button disabled={!ready || processing} onClick={capture} aria-label="Chụp tài liệu"
-          className="tap mx-auto grid h-24 w-24 place-items-center rounded-full border-8 border-white bg-emerald-400 shadow-lg disabled:opacity-50">
-          <span className="h-14 w-14 rounded-full bg-white" />
-        </button>
-        <p className="mt-3 text-sm text-slate-300">Không có tài khoản · Không tải ảnh lên mạng</p>
+
+      {/* Bottom Camera Controls Bar */}
+      <div className="px-4 pt-2 pb-4 text-center">
+        <p className="mb-3 text-xs font-medium text-slate-400 tracking-wide">
+          Đặt tài liệu trong khung xanh để tự động nhận diện
+        </p>
+
+        {/* iOS-style Shutter Button */}
+        <div className="flex items-center justify-center">
+          <button
+            disabled={!ready || processing}
+            onClick={capture}
+            aria-label="Chụp tài liệu"
+            className="group relative flex h-20 w-20 items-center justify-center rounded-full border-4 border-white/80 p-1 active:scale-90 transition-transform duration-150 disabled:opacity-40"
+          >
+            <span className="h-full w-full rounded-full bg-white transition-transform group-active:scale-95 shadow-inner" />
+          </button>
+        </div>
+
+        <p className="mt-3 text-[11px] text-slate-500 font-medium">
+          Xử lý trực tiếp trên thiết bị · An toàn &amp; Bảo mật
+        </p>
       </div>
     </main>
   )
@@ -818,9 +1019,16 @@ export default function App() {
 
 function Header({ back, title, disabled = false }) {
   return (
-    <header className="mb-5 flex items-center gap-3">
-      <button disabled={disabled} onClick={back} className="tap rounded-xl border border-slate-500 px-3 py-2 text-xl disabled:opacity-50">←</button>
-      <h1 className="text-2xl font-black">{title}</h1>
+    <header className="mb-4 flex items-center gap-3">
+      <button
+        disabled={disabled}
+        onClick={back}
+        className="tap flex h-10 w-10 items-center justify-center rounded-xl glass-panel text-slate-200 active:scale-90 transition-all disabled:opacity-50 shadow-md"
+        aria-label="Quay lại"
+      >
+        <ChevronLeft className="h-6 w-6 stroke-[2.5]" />
+      </button>
+      <h1 className="text-xl font-bold tracking-tight text-white">{title}</h1>
     </header>
   )
 }
@@ -842,18 +1050,24 @@ function Adjust({ image, points, setPoints }) {
   }
 
   return (
-    <div ref={ref} onPointerMove={update} onPointerUp={() => dragIdx.current = null} className="relative mx-auto max-h-[65vh] w-fit">
+    <div
+      ref={ref}
+      onPointerMove={update}
+      onPointerUp={() => dragIdx.current = null}
+      className="relative mx-auto max-h-[62vh] w-fit rounded-2xl overflow-hidden glass-panel p-2 shadow-2xl"
+    >
       <img
         src={image}
         onLoad={e => setImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
-        className="max-h-[65vh] max-w-full"
+        className="max-h-[60vh] max-w-full rounded-xl object-contain"
         alt="Ảnh gốc"
       />
       {imageSize && points.map((p, i) => (
-        <button key={i}
+        <button
+          key={i}
           onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
           aria-label={`Góc ${i + 1}`}
-          className="corner absolute h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-emerald-400"
+          className="corner absolute h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white bg-emerald-400 shadow-xl ring-4 ring-black/30 active:scale-125 transition-transform"
           style={{
             left: `${(p.x / imageSize.width) * 100}%`,
             top: `${(p.y / imageSize.height) * 100}%`,
