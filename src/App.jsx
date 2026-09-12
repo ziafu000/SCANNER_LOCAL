@@ -213,7 +213,13 @@ function customExtract(srcCanvas, pts) {
 
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
-  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (preview coords)
+  // Offscreen canvas for downscaled OpenCV detection (~360px wide)
+  const offscreen = useRef(null)
+  // Flag: true while an async detection pass is running (prevents re-entrancy)
+  const isDetecting = useRef(false)
+  // Timestamp of the last detection kick-off (ms) — used for throttling
+  const lastDetectTime = useRef(0)
+  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (overlay coords)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -294,6 +300,8 @@ export default function App() {
 
   async function startCamera() {
     activeCornersRef.current = null
+    isDetecting.current = false
+    lastDetectTime.current = 0
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
@@ -314,43 +322,90 @@ export default function App() {
   function drawLive() {
     const v = video.current, o = live.current
     if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
-    const max = 700, scale = Math.min(1, max / v.videoWidth)
-    const w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale)
-    if (o.width !== w) { o.width = w; o.height = h }
+
+    // Size the overlay canvas to match the displayed video element (CSS pixels)
+    const dispW = v.clientWidth || v.offsetWidth || 700
+    const dispH = v.clientHeight || v.offsetHeight || Math.round(dispW * v.videoHeight / (v.videoWidth || 1))
+    if (o.width !== dispW || o.height !== dispH) { o.width = dispW; o.height = dispH }
+
     const c = o.getContext('2d')
-    c.drawImage(v, 0, 0, w, h)
-    try {
-      const pts = findOptimalCorners(o)
-      if (pts) {
-        activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
-        c.strokeStyle = '#10b981'
-        c.lineWidth = 4
-        c.beginPath()
-        c.moveTo(pts[0].x, pts[0].y)
-        c.lineTo(pts[1].x, pts[1].y)
-        c.lineTo(pts[2].x, pts[2].y)
-        c.lineTo(pts[3].x, pts[3].y)
-        c.closePath()
-        c.stroke()
+    // Clear overlay — the <video> element renders the live feed natively at 60 FPS
+    c.clearRect(0, 0, o.width, o.height)
 
-        c.fillStyle = 'rgba(16, 185, 129, 0.12)'
-        c.fill()
+    // Throttled detection: kick off an async detection pass at most every 80ms (~12 fps)
+    const now = performance.now()
+    if (!isDetecting.current && now - lastDetectTime.current > 80) {
+      lastDetectTime.current = now
+      isDetecting.current = true
 
-        for (const pt of pts) {
-          c.fillStyle = '#ffffff'
-          c.beginPath()
-          c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
-          c.fill()
-          c.strokeStyle = '#10b981'
-          c.lineWidth = 2
-          c.stroke()
+      // Prepare / size the offscreen detection canvas (~360px wide)
+      const DETECT_MAX = 360
+      const detScale = Math.min(1, DETECT_MAX / v.videoWidth)
+      const dw = Math.round(v.videoWidth * detScale)
+      const dh = Math.round(v.videoHeight * detScale)
+      if (!offscreen.current) offscreen.current = document.createElement('canvas')
+      const oc = offscreen.current
+      if (oc.width !== dw || oc.height !== dh) { oc.width = dw; oc.height = dh }
+      oc.getContext('2d').drawImage(v, 0, 0, dw, dh)
+
+      // Run detection off the rAF critical path via a microtask
+      Promise.resolve().then(() => {
+        try {
+          const rawPts = findOptimalCorners(oc)
+          if (rawPts) {
+            // Scale detected points from offscreen coords to overlay (display) coords
+            const scaleToOverlay = { x: o.width / dw, y: o.height / dh }
+            const overlayPts = rawPts.map(p => ({
+              x: p.x * scaleToOverlay.x,
+              y: p.y * scaleToOverlay.y,
+            }))
+            // Store with videoWidth/Height for use in capture()
+            activeCornersRef.current = {
+              pts: overlayPts,
+              previewWidth: o.width,
+              previewHeight: o.height,
+              videoWidth: v.videoWidth,
+              videoHeight: v.videoHeight,
+            }
+          } else {
+            activeCornersRef.current = null
+          }
+        } catch {
+          activeCornersRef.current = null
+        } finally {
+          isDetecting.current = false
         }
-      } else {
-        activeCornersRef.current = null
-      }
-    } catch {
-      activeCornersRef.current = null
+      })
     }
+
+    // Draw the overlay (document boundary) using the most recently detected corners
+    const corners = activeCornersRef.current
+    if (corners) {
+      const { pts } = corners
+      c.strokeStyle = '#10b981'
+      c.lineWidth = 4
+      c.beginPath()
+      c.moveTo(pts[0].x, pts[0].y)
+      c.lineTo(pts[1].x, pts[1].y)
+      c.lineTo(pts[2].x, pts[2].y)
+      c.lineTo(pts[3].x, pts[3].y)
+      c.closePath()
+      c.stroke()
+
+      c.fillStyle = 'rgba(16, 185, 129, 0.12)'
+      c.fill()
+
+      for (const pt of pts) {
+        c.fillStyle = '#ffffff'
+        c.beginPath()
+        c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
+        c.fill()
+        c.strokeStyle = '#10b981'
+        c.lineWidth = 2
+        c.stroke()
+      }
+    }
+
     frame.current = requestAnimationFrame(drawLive)
   }
 
@@ -370,20 +425,28 @@ export default function App() {
       let detectionGood = false
 
       try {
-        const max = 700, scale = Math.min(1, max / c.width)
-        const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
+        // Run detection on the same 360px offscreen canvas used during preview
+        const DETECT_MAX = 360
+        const detScale = Math.min(1, DETECT_MAX / c.width)
+        const dw = Math.round(c.width * detScale)
+        const dh = Math.round(c.height * detScale)
         const dc = document.createElement('canvas')
         dc.width = dw; dc.height = dh
         dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
 
         const scaledPoints = findOptimalCorners(dc)
         if (scaledPoints) {
-          points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+          // Scale from offscreen coords back to full video resolution
+          points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
           detectionGood = true
         } else if (activeCornersRef.current?.pts) {
-          const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
-          const scaleX = c.width / previewWidth
-          const scaleY = c.height / previewHeight
+          // Fall back to the last live-preview corners, scaled to full video resolution
+          const { pts: livePts, previewWidth, previewHeight, videoWidth: pvw, videoHeight: pvh } = activeCornersRef.current
+          // Use stored video dimensions when available for accuracy
+          const refW = pvw ?? previewWidth
+          const refH = pvh ?? previewHeight
+          const scaleX = c.width / refW
+          const scaleY = c.height / refH
           points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
           detectionGood = true
         }
