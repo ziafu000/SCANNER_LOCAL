@@ -418,28 +418,45 @@ export default function App() {
   }
 
   async function confirmPage() {
-    if (!pendingPage) return
-    setPages(p => {
-      const updated = [...p, pendingPage]
-      showToast(`Đã thêm trang ${updated.length}`)
-      return updated
-    })
-    setPendingPage(null)
-    setScreen('camera')
-    setStatus('Đưa tờ giấy vào khung xanh')
-    await new Promise(resolve => setTimeout(resolve, 100))
-    await startCamera()
+    if (processingRef.current || !pendingPage) return
+    processingRef.current = true
+    setProcessing(true)
+    const page = pendingPage
+    try {
+      setPages(p => {
+        const updated = [...p, page]
+        showToast(`Đã thêm trang ${updated.length}`)
+        return updated
+      })
+      setPendingPage(null)
+      setScreen('camera')
+      setStatus('Đưa tờ giấy vào khung xanh')
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await startCamera()
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
+    }
   }
 
   async function retakePage() {
-    if (pendingPage) {
-      URL.revokeObjectURL(pendingPage.url)
-      setPendingPage(null)
+    if (processingRef.current) return
+    processingRef.current = true
+    setProcessing(true)
+    const page = pendingPage
+    try {
+      if (page) {
+        URL.revokeObjectURL(page.url)
+        setPendingPage(null)
+      }
+      setScreen('camera')
+      setStatus('Đưa tờ giấy vào khung xanh')
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await startCamera()
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
-    setScreen('camera')
-    setStatus('Đưa tờ giấy vào khung xanh')
-    await new Promise(resolve => setTimeout(resolve, 100))
-    await startCamera()
   }
 
   const download = (blob, name) => {
@@ -580,13 +597,15 @@ export default function App() {
         )}
         <div className="flex w-full gap-3">
           <button
-            className="tap flex-1 rounded-2xl border-2 border-slate-500 p-4 text-xl font-black text-slate-200"
+            disabled={processing}
+            className="tap flex-1 rounded-2xl border-2 border-slate-500 p-4 text-xl font-black text-slate-200 disabled:opacity-50"
             onClick={retakePage}
           >
             Chụp lại
           </button>
           <button
-            className="tap flex-1 rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+            disabled={processing}
+            className="tap flex-1 rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
             onClick={confirmPage}
           >
             Xác nhận thêm
