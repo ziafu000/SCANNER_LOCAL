@@ -196,7 +196,9 @@ export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
-  const [ready, setReady] = useState(false)
+  // Separate readiness flags: OpenCV loaded + camera playing
+  const [isOpenCvLoaded, setIsOpenCvLoaded] = useState(false)
+  const [isCameraPlaying, setIsCameraPlaying] = useState(false)
   const [error, setError] = useState('')
   // draft: { blob, url, raw (objectURL of original capture), cropped (objectURL of perspective-corrected unfiltered), points }
   const [draft, setDraft] = useState(null)
@@ -204,6 +206,9 @@ export default function App() {
   const [filter, setFilter] = useState('color')
   const [gallery, setGallery] = useState([])
   const [drag, setDrag] = useState(null)
+
+  // Derived readiness: both OpenCV and camera must be playing
+  const isScannerReady = isOpenCvLoaded && isCameraPlaying
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
@@ -214,8 +219,8 @@ export default function App() {
     const wait = () => {
       if (window.cv?.Mat && window.cv?.imread) {
         scan.current = new JScanify()
-        setStatus('Sẵn sàng quét')
-        setReady(true)
+        setStatus('Đang mở camera…')
+        setIsOpenCvLoaded(true)
         startCamera()
       } else if (tries++ < 200) {
         setTimeout(wait, 100)
@@ -228,20 +233,32 @@ export default function App() {
   }, [])
 
   async function startCamera() {
-    stopped(); setError(''); setStatus('Đang mở camera…')
+    stopped()
+    setError('')
+    setIsCameraPlaying(false)
+    setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
         audio: false
       })
       stream.current = s
-      video.current.srcObject = s
-      await video.current.play()
-      setStatus('Đưa tờ giấy vào khung xanh')
-      drawLive()
+      const v = video.current
+      v.srcObject = s
+
+      // Start tracking loop inside onplaying event — no arbitrary delay timers
+      v.onplaying = () => {
+        setIsCameraPlaying(true)
+        setStatus('Đưa tờ giấy vào khung xanh')
+        cancelAnimationFrame(frame.current)
+        drawLive()
+      }
+
+      await v.play()
     } catch {
       setError('SCANNER cần quyền camera để quét. Hãy cho phép Camera rồi bấm thử lại.')
       setStatus('Chưa mở được camera')
+      setIsCameraPlaying(false)
     }
   }
 
@@ -280,25 +297,62 @@ export default function App() {
     c.width = v.videoWidth; c.height = v.videoHeight
     c.getContext('2d').drawImage(v, 0, 0)
     stopped()
+    setIsCameraPlaying(false)
 
     let out = null
     let points = null
+    let detectionFailed = false
+
     try {
+      // Scale down for contour detection (matches preview scale)
       const max = 700, scale = Math.min(1, max / c.width)
       const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
       const dc = document.createElement('canvas')
       dc.width = dw; dc.height = dh
       dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
 
-      const scaledPoints = findOptimalCorners(dc)
-      if (scaledPoints) {
-        points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+      let scaledPoints = findOptimalCorners(dc)
+
+      if (!scaledPoints) {
+        // On-demand fallback: run detection directly on full high-res capture
+        scaledPoints = findOptimalCorners(c)
+        if (scaledPoints) {
+          // Points are already in full-res coordinates
+          points = scaledPoints
+        } else {
+          // Detection failed on both scaled and full-res frame
+          detectionFailed = true
+        }
       } else {
-        points = fitPoints(c.width, c.height)
+        points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
       }
-      out = customExtract(c, points)
-    } catch { /* fallback below */ }
-    if (!out) out = c
+
+      if (!detectionFailed && points) {
+        out = customExtract(c, points)
+      }
+    } catch (e) {
+      console.warn('Contour detection error:', e)
+      detectionFailed = true
+    }
+
+    if (detectionFailed || !out) {
+      // Detection failed: store raw capture and navigate to manual 4-point adjust
+      // instead of silently saving a distorted full-frame image
+      const rawBlob = await blobFrom(c)
+      const rawUrl = urlOf(rawBlob)
+      const fallbackPts = fitPoints(c.width, c.height)
+      setDraft({
+        blob: null,
+        url: null,
+        raw: rawUrl,
+        cropped: rawUrl,
+        points: fallbackPts,
+      })
+      setFilter('color')
+      setScreen('adjust')
+      setStatus('Không nhận ra tài liệu — hãy chỉnh 4 góc thủ công')
+      return
+    }
 
     // Store raw capture and cropped (pre-filter) separately
     const rawBlob = await blobFrom(c)
@@ -562,8 +616,16 @@ export default function App() {
           <p className="mb-2 text-lg font-bold text-emerald-300">Đang quét: {pages.length} trang</p>
         )}
         <p className="mb-3 text-lg font-semibold">Đặt giấy vào khung, rồi bấm nút tròn</p>
-        <button disabled={!ready} onClick={capture} aria-label="Chụp tài liệu"
-          className="tap mx-auto grid h-24 w-24 place-items-center rounded-full border-8 border-white bg-emerald-400 shadow-lg disabled:opacity-50">
+        <button
+          disabled={!isScannerReady}
+          onClick={capture}
+          aria-label="Chụp tài liệu"
+          className={`tap mx-auto grid h-24 w-24 place-items-center rounded-full border-8 border-white shadow-lg
+            ${isScannerReady
+              ? 'bg-emerald-400'
+              : 'bg-emerald-400/50 animate-pulse cursor-not-allowed'
+            }`}
+        >
           <span className="h-14 w-14 rounded-full bg-white" />
         </button>
         <p className="mt-3 text-sm text-slate-300">Không có tài khoản · Không tải ảnh lên mạng</p>
@@ -614,4 +676,3 @@ function Adjust({ image, points, setPoints }) {
     </div>
   )
 }
-

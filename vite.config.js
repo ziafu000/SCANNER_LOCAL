@@ -6,6 +6,8 @@ export default defineConfig({
   base,
   plugins: [react(), VitePWA({
     registerType: 'autoUpdate',
+    // Immediately activate new SW and claim clients — critical for iOS PWA updates
+    injectRegister: 'auto',
     includeAssets: ['icon.svg'],
     manifest: {
       name: 'SCANNER',
@@ -23,10 +25,26 @@ export default defineConfig({
       ]
     },
     workbox: {
+      // Only cache core app shell assets — exclude large OpenCV wasm and blobs
       globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-      maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+      // Exclude opencv.js (large binary) from precache to avoid cache bloat
+      globIgnores: ['**/opencv.js', '**/opencv.js.map'],
+      maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+      // Activate new SW immediately without waiting for old clients to close
+      skipWaiting: true,
+      // Claim all open clients so the new SW controls them right away
+      clientsClaim: true,
+      // Remove stale caches from previous SW versions automatically
+      cleanupOutdatedCaches: true,
       runtimeCaching: [
-        { urlPattern: /^https:\/\/docs\.opencv\.org\/.*/i, handler: 'CacheFirst', options: { cacheName: 'opencv-cache', expiration: { maxEntries: 5, maxAgeSeconds: 60*60*24*30 } } }
+        {
+          urlPattern: /^https:\/\/docs\.opencv\.org\/.*/i,
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'opencv-cache',
+            expiration: { maxEntries: 5, maxAgeSeconds: 60 * 60 * 24 * 30 }
+          }
+        }
       ]
     }
   })],
