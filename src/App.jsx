@@ -325,7 +325,12 @@ export default function App() {
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 60, min: 30 },
+        },
         audio: false
       })
       stream.current = s
