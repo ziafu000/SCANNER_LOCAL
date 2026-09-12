@@ -216,6 +216,10 @@ export default function App() {
   const [processing, setProcessing] = useState(false)
   const processingRef = useRef(false)
   const [viewedPages, setViewedPages] = useState([])
+  // Capture confirmation: pending page waiting for user to confirm/retake
+  const [pendingPage, setPendingPage] = useState(null) // { id, blob, url }
+  // Fullscreen lightbox: URL of image to show, or null
+  const [lightbox, setLightbox] = useState(null)
 
   useEffect(() => {
     const nextPages = viewRecord?.pages.map((blob, i) => ({
@@ -359,12 +363,11 @@ export default function App() {
 
       if (detectionGood) {
         const filteredBlob = await blobFrom(canvasFilter(out, 'color'))
-        setPages(p => [...p, { id: uid(), blob: filteredBlob, url: urlOf(filteredBlob) }])
-        showToast(`Đã thêm trang ${pages.length + 1}`)
+        const newPage = { id: uid(), blob: filteredBlob, url: urlOf(filteredBlob) }
+        setPendingPage(newPage)
         setFilter('color')
-        setStatus('Đưa tờ giấy vào khung xanh')
-        await new Promise(resolve => setTimeout(resolve, 100))
-        await startCamera()
+        setScreen('confirm')
+        setStatus('Xem lại và xác nhận trang')
       } else {
         const rawBlob = await blobFrom(c)
         setDraft({ raw: urlOf(rawBlob), points: fitPoints(c.width, c.height) })
@@ -404,20 +407,39 @@ export default function App() {
         url: urlOf(filteredBlob),
       }
 
-      setPages(p => {
-        const updated = [...p, newPage]
-        showToast(`Đã thêm trang ${updated.length}`)
-        return updated
-      })
       setDraft(null)
-      setScreen('camera')
-      setStatus('Đưa tờ giấy vào khung xanh')
-      await new Promise(resolve => setTimeout(resolve, 100))
-      await startCamera()
+      setPendingPage(newPage)
+      setScreen('confirm')
+      setStatus('Xem lại và xác nhận trang')
     } finally {
       processingRef.current = false
       setProcessing(false)
     }
+  }
+
+  async function confirmPage() {
+    if (!pendingPage) return
+    setPages(p => {
+      const updated = [...p, pendingPage]
+      showToast(`Đã thêm trang ${updated.length}`)
+      return updated
+    })
+    setPendingPage(null)
+    setScreen('camera')
+    setStatus('Đưa tờ giấy vào khung xanh')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await startCamera()
+  }
+
+  async function retakePage() {
+    if (pendingPage) {
+      URL.revokeObjectURL(pendingPage.url)
+      setPendingPage(null)
+    }
+    setScreen('camera')
+    setStatus('Đưa tờ giấy vào khung xanh')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await startCamera()
   }
 
   const download = (blob, name) => {
@@ -519,6 +541,61 @@ export default function App() {
     setScreen('gallery-view')
   }
 
+  /* ───────── Lightbox overlay (rendered on top of any screen) ───────── */
+  const LightboxOverlay = lightbox ? (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95"
+      onClick={() => setLightbox(null)}
+    >
+      <button
+        onClick={() => setLightbox(null)}
+        className="absolute right-4 top-4 z-50 rounded-2xl bg-slate-800 px-5 py-3 text-lg font-black text-white"
+        aria-label="Đóng"
+      >
+        Đóng
+      </button>
+      <img
+        src={lightbox}
+        onClick={e => e.stopPropagation()}
+        className="max-h-[90vh] max-w-[95vw] rounded-xl object-contain shadow-2xl"
+        alt="Xem ảnh"
+      />
+    </div>
+  ) : null
+
+  /* ───────── Capture Confirmation Screen ───────── */
+  if (screen === 'confirm') return (
+    <>
+      {LightboxOverlay}
+      <main className="safe flex min-h-full flex-col items-center bg-slate-950 p-5">
+        <Header back={retakePage} title="Xem lại trang" />
+        <p className="mb-4 text-slate-300">Trang quét thành công. Xác nhận để thêm vào giỏ.</p>
+        {pendingPage && (
+          <img
+            src={pendingPage.url}
+            className="mb-6 max-h-[55vh] max-w-full cursor-zoom-in rounded-2xl object-contain shadow-lg"
+            alt="Trang đã quét"
+            onClick={() => setLightbox(pendingPage.url)}
+          />
+        )}
+        <div className="flex w-full gap-3">
+          <button
+            className="tap flex-1 rounded-2xl border-2 border-slate-500 p-4 text-xl font-black text-slate-200"
+            onClick={retakePage}
+          >
+            Chụp lại
+          </button>
+          <button
+            className="tap flex-1 rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+            onClick={confirmPage}
+          >
+            Xác nhận thêm
+          </button>
+        </div>
+      </main>
+    </>
+  )
+
   /* ───────── Gallery Screen ───────── */
   if (screen === 'gallery') return (
     <main className="safe min-h-full bg-slate-950 p-5">
@@ -556,82 +633,98 @@ export default function App() {
   if (screen === 'gallery-view') {
     const rec = viewRecord
     return (
-      <main className="safe min-h-full bg-slate-950 p-5">
-        <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
-        <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
-        <div className="space-y-3">
-          {viewedPages.map((p, i) => (
-            <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
-              <img src={p.url} className="h-24 w-18 rounded object-cover" />
-              <b className="flex-1 text-xl">Trang {i + 1}</b>
-            </div>
-          ))}
-        </div>
-        <button className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
-          onClick={() => exportRecordPdf(rec)}>
-          Xuất PDF lại
-        </button>
-      </main>
+      <>
+        {LightboxOverlay}
+        <main className="safe min-h-full bg-slate-950 p-5">
+          <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
+          <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
+          <div className="space-y-3">
+            {viewedPages.map((p, i) => (
+              <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
+                <img
+                  src={p.url}
+                  className="h-24 w-18 cursor-zoom-in rounded object-cover"
+                  onClick={() => setLightbox(p.url)}
+                  alt={`Trang ${i + 1}`}
+                />
+                <b className="flex-1 text-xl">Trang {i + 1}</b>
+              </div>
+            ))}
+          </div>
+          <button className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+            onClick={() => exportRecordPdf(rec)}>
+            Xuất PDF lại
+          </button>
+        </main>
+      </>
     )
   }
 
   /* ───────── Cart Screen (active scan session) ───────── */
   if (screen === 'cart') return (
-    <main className="safe min-h-full bg-slate-950 p-5">
-      <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
-      {/* Editable document name */}
-      <div className="mb-4">
-        <label className="mb-1 block text-sm text-slate-400">Tên tài liệu</label>
-        <input
-          className="w-full rounded-xl bg-slate-800 px-4 py-3 text-lg font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
-          value={docName}
-          onChange={e => setDocName(e.target.value)}
-          placeholder="Nhập tên tài liệu…"
-        />
-      </div>
-      {pages.length === 0 ? (
-        <div className="rounded-3xl border-2 border-dashed border-slate-600 p-10 text-center text-xl text-slate-300">
-          Chưa có trang nào trong giỏ.
+    <>
+      {LightboxOverlay}
+      <main className="safe min-h-full bg-slate-950 p-5">
+        <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
+        {/* Editable document name */}
+        <div className="mb-4">
+          <label className="mb-1 block text-sm text-slate-400">Tên tài liệu</label>
+          <input
+            className="w-full rounded-xl bg-slate-800 px-4 py-3 text-lg font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            value={docName}
+            onChange={e => setDocName(e.target.value)}
+            placeholder="Nhập tên tài liệu…"
+          />
         </div>
-      ) : (
-        <div className="space-y-3">
-          {pages.map((p, i) => (
-            <div
-              draggable={!processing}
-              onDragStart={() => setDrag(i)}
-              onDragOver={e => e.preventDefault()}
-              onDrop={() => { movePage(drag, i); setDrag(null) }}
-              key={p.id}
-              className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3"
-            >
-              <img src={p.url} className="h-24 w-18 rounded object-cover" />
-              <b className="flex-1 text-xl">Trang {i + 1}</b>
-              <div className="flex flex-col gap-1">
-                <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i - 1)}>↑</button>
-                <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i + 1)}>↓</button>
-              </div>
-              <button
-                aria-label="Xóa trang"
-                disabled={processing}
-                className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl disabled:opacity-50"
-                onClick={() => removePage(i)}
+        {pages.length === 0 ? (
+          <div className="rounded-3xl border-2 border-dashed border-slate-600 p-10 text-center text-xl text-slate-300">
+            Chưa có trang nào trong giỏ.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pages.map((p, i) => (
+              <div
+                draggable={!processing}
+                onDragStart={() => setDrag(i)}
+                onDragOver={e => e.preventDefault()}
+                onDrop={() => { movePage(drag, i); setDrag(null) }}
+                key={p.id}
+                className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3"
               >
-                🗑
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {pages.length > 0 && (
-        <button
-          disabled={processing}
-          className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
-          onClick={exportCartPdf}
-        >
-          Xong &amp; Xuất PDF
-        </button>
-      )}
-    </main>
+                <img
+                  src={p.url}
+                  className="h-24 w-18 cursor-zoom-in rounded object-cover"
+                  onClick={() => setLightbox(p.url)}
+                  alt={`Trang ${i + 1}`}
+                />
+                <b className="flex-1 text-xl">Trang {i + 1}</b>
+                <div className="flex flex-col gap-1">
+                  <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i - 1)}>↑</button>
+                  <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i + 1)}>↓</button>
+                </div>
+                <button
+                  aria-label="Xóa trang"
+                  disabled={processing}
+                  className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl disabled:opacity-50"
+                  onClick={() => removePage(i)}
+                >
+                  🗑
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {pages.length > 0 && (
+          <button
+            disabled={processing}
+            className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
+            onClick={exportCartPdf}
+          >
+            Xong &amp; Xuất PDF
+          </button>
+        )}
+      </main>
+    </>
   )
 
   /* ───────── Adjust Screen ───────── */
