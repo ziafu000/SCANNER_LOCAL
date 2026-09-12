@@ -14,6 +14,7 @@
     "idb": "^8.0.0",
     "jscanify": "1.4.3",
     "jspdf": "^2.5.2",
+    "lucide-react": "^1.45.0",
     "opencv.js": "^1.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
