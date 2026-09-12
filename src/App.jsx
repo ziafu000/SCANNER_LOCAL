@@ -638,7 +638,7 @@ export default function App() {
   if (screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
       <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
-      <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
+      <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
       {error && <p className="mt-3 rounded-xl bg-red-950 p-3 text-red-200">{error}</p>}
       {/* Filter selection while adjusting */}
       <div className="mt-4 grid grid-cols-3 gap-2">
@@ -715,8 +715,8 @@ function Header({ back, title, disabled = false }) {
 
 function Adjust({ image, points, setPoints }) {
   const ref = useRef()
-  const imgRef = useRef()
   const dragIdx = useRef(null)
+  const [imageSize, setImageSize] = useState(null)
 
   const update = e => {
     if (dragIdx.current === null) return
@@ -724,22 +724,27 @@ function Adjust({ image, points, setPoints }) {
     const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
     const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))
     setPoints(p => p.map((v, i) => i === dragIdx.current
-      ? { x: x * (imgRef.current?.naturalWidth || 1), y: y * (imgRef.current?.naturalHeight || 1) }
+      ? { x: x * imageSize.width, y: y * imageSize.height }
       : v
     ))
   }
 
   return (
     <div ref={ref} onPointerMove={update} onPointerUp={() => dragIdx.current = null} className="relative mx-auto max-h-[65vh] w-fit">
-      <img ref={imgRef} src={image} className="max-h-[65vh] max-w-full" alt="Ảnh gốc" />
-      {points.map((p, i) => (
+      <img
+        src={image}
+        onLoad={e => setImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+        className="max-h-[65vh] max-w-full"
+        alt="Ảnh gốc"
+      />
+      {imageSize && points.map((p, i) => (
         <button key={i}
           onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
           aria-label={`Góc ${i + 1}`}
           className="corner absolute h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-emerald-400"
           style={{
-            left: `${(p.x / (imgRef.current?.naturalWidth || 1)) * 100}%`,
-            top: `${(p.y / (imgRef.current?.naturalHeight || 1)) * 100}%`,
+            left: `${(p.x / imageSize.width) * 100}%`,
+            top: `${(p.y / imageSize.height) * 100}%`,
           }}
         />
       ))}
