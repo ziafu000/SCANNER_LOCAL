@@ -323,7 +323,6 @@ export default function App() {
       const pts = findOptimalCorners(o)
       if (pts) {
         activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
-        // Clean high-contrast emerald detection quad
         c.strokeStyle = '#10b981'
         c.lineWidth = 4
         c.beginPath()
@@ -334,11 +333,9 @@ export default function App() {
         c.closePath()
         c.stroke()
 
-        // Subtle fill for feedback
         c.fillStyle = 'rgba(16, 185, 129, 0.12)'
         c.fill()
 
-        // Sleek corner markers
         for (const pt of pts) {
           c.fillStyle = '#ffffff'
           c.beginPath()
@@ -770,7 +767,6 @@ export default function App() {
         <div>
           <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
 
-          {/* Editable document name input */}
           <div className="mb-5">
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Tên tài liệu xuất</label>
             <div className="relative">
@@ -874,7 +870,6 @@ export default function App() {
         <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
         {error && <p className="mt-3 rounded-2xl bg-red-950/80 border border-red-500/30 p-3 text-sm text-red-200">{error}</p>}
 
-        {/* Filter selection pills */}
         <div className="mt-4 grid grid-cols-3 gap-2">
           {[
             ['color', 'Ảnh gốc'],
@@ -910,7 +905,6 @@ export default function App() {
   /* ───────── Camera Screen (default) ───────── */
   return (
     <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
-      {/* Top Floating Glass Capsule Bar */}
       <header className="px-4 pt-1 pb-2">
         <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
           <div className="flex items-center gap-2.5">
@@ -948,12 +942,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* Viewfinder with optical bracket markers */}
       <div className="relative mx-4 my-1 flex-1 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
         <video ref={video} playsInline muted className="h-full w-full object-cover" />
         <canvas ref={live} className="absolute inset-0 h-full w-full object-fill" />
 
-        {/* Optical Viewfinder L-brackets overlay */}
         <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
           <div className="flex justify-between">
             <div className="h-6 w-6 border-t-2 border-l-2 border-white/70 rounded-tl-sm" />
@@ -978,7 +970,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Toast notification capsule */}
         {toast && (
           <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center animate-in fade-in slide-in-from-bottom-3 duration-200">
             <div className="flex items-center gap-2 rounded-full glass-panel px-5 py-2.5 text-sm font-bold text-emerald-400 shadow-2xl border border-emerald-400/30">
@@ -989,13 +980,11 @@ export default function App() {
         )}
       </div>
 
-      {/* Bottom Camera Controls Bar */}
       <div className="px-4 pt-2 pb-4 text-center">
         <p className="mb-3 text-xs font-medium text-slate-400 tracking-wide">
           Đặt tài liệu trong khung xanh để tự động nhận diện
         </p>
 
-        {/* iOS-style Shutter Button */}
         <div className="flex items-center justify-center">
           <button
             disabled={!ready || processing}
