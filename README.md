@@ -1,6 +1,6 @@
 # SCANNER
 
-SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào viền xanh và bấm một nút lớn. Ứng dụng tự tìm mép giấy, nắn phối cảnh, tăng độ rõ, rồi lưu ảnh hoặc nhiều trang thành PDF.
+SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào khung hình và bấm một nút lớn. Ứng dụng tự tìm mép giấy, kể cả biên lai nhỏ hoặc tờ giấy ở xa; khi viền xanh xuất hiện, ảnh chụp sẽ được cắt theo viền đó. Sau đó, ứng dụng nắn phối cảnh, tăng độ rõ, rồi lưu ảnh hoặc nhiều trang thành PDF.
 
 - Ba chế độ: **Màu / Xám / Đen trắng**
 - Chia sẻ ảnh qua bảng Chia sẻ của iPhone (Zalo, Messenger… nếu đã cài)
