@@ -637,7 +637,7 @@ export default function App() {
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
-      <Header back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+      <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
       <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
       {error && <p className="mt-3 rounded-xl bg-red-950 p-3 text-red-200">{error}</p>}
       {/* Filter selection while adjusting */}
@@ -665,12 +665,13 @@ export default function App() {
         </div>
         <div className="flex gap-2">
           <button
+            disabled={processing}
             onClick={() => { stopped(); setScreen('cart') }}
-            className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300"
+            className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300 disabled:opacity-50"
           >
             🛒 {pages.length} trang
           </button>
-          <button onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold">Thư viện</button>
+          <button disabled={processing} onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold disabled:opacity-50">Thư viện</button>
         </div>
       </header>
       <div className="relative mx-3 mt-4 flex-1 overflow-hidden rounded-3xl bg-black">
@@ -703,10 +704,10 @@ export default function App() {
   )
 }
 
-function Header({ back, title }) {
+function Header({ back, title, disabled = false }) {
   return (
     <header className="mb-5 flex items-center gap-3">
-      <button onClick={back} className="tap rounded-xl border border-slate-500 px-3 py-2 text-xl">←</button>
+      <button disabled={disabled} onClick={back} className="tap rounded-xl border border-slate-500 px-3 py-2 text-xl disabled:opacity-50">←</button>
       <h1 className="text-2xl font-black">{title}</h1>
     </header>
   )
