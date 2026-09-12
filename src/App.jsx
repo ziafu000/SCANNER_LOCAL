@@ -214,6 +214,19 @@ export default function App() {
   const toastTimer = useRef(null)
   // For gallery view mode (read-only pages)
   const [viewRecord, setViewRecord] = useState(null)
+  const [processing, setProcessing] = useState(false)
+  const processingRef = useRef(false)
+  const [viewedPages, setViewedPages] = useState([])
+
+  useEffect(() => {
+    const nextPages = viewRecord?.pages.map((blob, i) => ({
+      id: `${viewRecord.id}-${i}`,
+      blob,
+      url: urlOf(blob),
+    })) ?? []
+    setViewedPages(nextPages)
+    return () => nextPages.forEach(page => URL.revokeObjectURL(page.url))
+  }, [viewRecord])
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
@@ -293,105 +306,117 @@ export default function App() {
   }
 
   async function capture() {
-    if (!video.current?.videoWidth) return
-    setStatus('Đang nắn thẳng trang…')
-    const c = document.createElement('canvas'), v = video.current
-    c.width = v.videoWidth; c.height = v.videoHeight
-    c.getContext('2d').drawImage(v, 0, 0)
-    stopped()
-
-    let out = null
-    let points = null
-    let detectionGood = false // true if we found a clean 4-corner quad
-
+    if (processingRef.current || !video.current?.videoWidth) return
+    processingRef.current = true
+    setProcessing(true)
     try {
-      const max = 700, scale = Math.min(1, max / c.width)
-      const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
-      const dc = document.createElement('canvas')
-      dc.width = dw; dc.height = dh
-      dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
+      setStatus('Đang nắn thẳng trang…')
+      const c = document.createElement('canvas'), v = video.current
+      c.width = v.videoWidth; c.height = v.videoHeight
+      c.getContext('2d').drawImage(v, 0, 0)
+      stopped()
 
-      const scaledPoints = findOptimalCorners(dc)
-      if (scaledPoints) {
-        points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
-        detectionGood = true
-      } else if (activeCornersRef.current?.pts) {
-        // High-res detection failed but the live preview had a visible green box —
-        // scale those preview-space corners up to the full-resolution canvas.
-        const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
-        const scaleX = c.width / previewWidth
-        const scaleY = c.height / previewHeight
-        points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
-        detectionGood = true
-      } else {
-        // No detection at all — use fitPoints and send to adjust screen
-        points = fitPoints(c.width, c.height)
+      let out = null
+      let points = null
+      let detectionGood = false // true if we found a clean 4-corner quad
+
+      try {
+        const max = 700, scale = Math.min(1, max / c.width)
+        const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
+        const dc = document.createElement('canvas')
+        dc.width = dw; dc.height = dh
+        dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
+
+        const scaledPoints = findOptimalCorners(dc)
+        if (scaledPoints) {
+          points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+          detectionGood = true
+        } else if (activeCornersRef.current?.pts) {
+          const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
+          const scaleX = c.width / previewWidth
+          const scaleY = c.height / previewHeight
+          points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
+          detectionGood = true
+        } else {
+          points = fitPoints(c.width, c.height)
+        }
+        out = customExtract(c, points)
+      } catch {
         detectionGood = false
       }
-      out = customExtract(c, points)
-    } catch { /* fallback below */ }
-    if (!out) out = c
+      if (!out) out = c
 
-    // Store raw capture and cropped (pre-filter) separately
-    const rawBlob = await blobFrom(c)
-    const croppedBlob = await blobFrom(out)
-    const filtered = canvasFilter(out, 'color')
-    const filteredBlob = await blobFrom(filtered)
+      const rawBlob = await blobFrom(c)
+      const croppedBlob = await blobFrom(out)
+      const filtered = canvasFilter(out, 'color')
+      const filteredBlob = await blobFrom(filtered)
 
-    const draftData = {
-      blob: filteredBlob,
-      url: urlOf(filteredBlob),
-      raw: urlOf(rawBlob),
-      cropped: urlOf(croppedBlob),
-      points: points || fitPoints(c.width, c.height),
-    }
+      const draftData = {
+        blob: filteredBlob,
+        url: urlOf(filteredBlob),
+        raw: urlOf(rawBlob),
+        cropped: urlOf(croppedBlob),
+        points: points || fitPoints(c.width, c.height),
+      }
 
-    if (detectionGood) {
-      // Auto-add to cart and stay on camera
-      setPages(p => [...p, { ...draftData, id: uid() }])
-      showToast(`Đã thêm trang ${pages.length + 1}`)
-      setFilter('color')
-      setStatus('Đưa tờ giấy vào khung xanh')
-      setTimeout(startCamera, 100)
-    } else {
-      // Detection failed — go to adjust screen so user can fix corners
-      setDraft(draftData)
-      setFilter('color')
-      setScreen('adjust')
-      setStatus('Chỉnh lại 4 góc')
+      if (detectionGood) {
+        setPages(p => [...p, { ...draftData, id: uid() }])
+        showToast(`Đã thêm trang ${pages.length + 1}`)
+        setFilter('color')
+        setStatus('Đưa tờ giấy vào khung xanh')
+        await new Promise(resolve => setTimeout(resolve, 100))
+        await startCamera()
+      } else {
+        setDraft(draftData)
+        setFilter('color')
+        setScreen('adjust')
+        setStatus('Chỉnh lại 4 góc')
+      }
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
   }
 
   async function applyManual() {
-    const img = await loadImage(draft.raw)
-    const c = document.createElement('canvas')
-    c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
-    let out
+    if (processingRef.current) return
+    processingRef.current = true
+    setProcessing(true)
     try {
-      out = customExtract(c, draft.points)
-    } catch { out = c }
+      const img = await loadImage(draft.raw)
+      const c = document.createElement('canvas')
+      c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
+      let out
+      try {
+        out = customExtract(c, draft.points)
+      } catch { out = c }
 
-    const croppedBlob = await blobFrom(out)
-    const filtered = canvasFilter(out, filter)
-    const filteredBlob = await blobFrom(filtered)
+      const croppedBlob = await blobFrom(out)
+      const filtered = canvasFilter(out, filter)
+      const filteredBlob = await blobFrom(filtered)
 
-    const newPage = {
-      ...draft,
-      blob: filteredBlob,
-      url: urlOf(filteredBlob),
-      cropped: urlOf(croppedBlob),
-      id: uid(),
+      const newPage = {
+        ...draft,
+        blob: filteredBlob,
+        url: urlOf(filteredBlob),
+        cropped: urlOf(croppedBlob),
+        id: uid(),
+      }
+
+      setPages(p => {
+        const updated = [...p, newPage]
+        showToast(`Đã thêm trang ${updated.length}`)
+        return updated
+      })
+      setDraft(null)
+      setScreen('camera')
+      setStatus('Đưa tờ giấy vào khung xanh')
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await startCamera()
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
-
-    setPages(p => {
-      const updated = [...p, newPage]
-      showToast(`Đã thêm trang ${updated.length}`)
-      return updated
-    })
-    setDraft(null)
-    setScreen('camera')
-    setStatus('Đưa tờ giấy vào khung xanh')
-    setTimeout(startCamera, 100)
   }
 
   // Re-apply filter from the cropped (perspective-corrected, unfiltered) source
@@ -529,13 +554,12 @@ export default function App() {
   /* ───────── Gallery View Screen (read-only record viewer) ───────── */
   if (screen === 'gallery-view') {
     const rec = viewRecord
-    const recPages = rec ? rec.pages.map((blob, i) => ({ id: `${rec.id}-${i}`, blob, url: urlOf(blob) })) : []
     return (
       <main className="safe min-h-full bg-slate-950 p-5">
         <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
         <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
         <div className="space-y-3">
-          {recPages.map((p, i) => (
+          {viewedPages.map((p, i) => (
             <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-slate-800 p-3">
               <img src={p.url} className="h-24 w-18 rounded object-cover" />
               <b className="flex-1 text-xl">Trang {i + 1}</b>
@@ -621,7 +645,7 @@ export default function App() {
           </button>
         ))}
       </div>
-      <button className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950" onClick={applyManual}>
+      <button disabled={processing} className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50" onClick={applyManual}>
         Áp dụng 4 góc
       </button>
     </main>
@@ -667,7 +691,7 @@ export default function App() {
       </div>
       <div className="p-5 text-center">
         <p className="mb-3 text-lg font-semibold">Đặt giấy vào khung, rồi bấm nút tròn</p>
-        <button disabled={!ready} onClick={capture} aria-label="Chụp tài liệu"
+        <button disabled={!ready || processing} onClick={capture} aria-label="Chụp tài liệu"
           className="tap mx-auto grid h-24 w-24 place-items-center rounded-full border-8 border-white bg-emerald-400 shadow-lg disabled:opacity-50">
           <span className="h-14 w-14 rounded-full bg-white" />
         </button>
