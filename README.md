@@ -1,10 +1,10 @@
 # SCANNER
 
-SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào khung hình và bấm một nút lớn. Ứng dụng tự tìm mép giấy, kể cả biên lai nhỏ hoặc tờ giấy ở xa; khi viền xanh xuất hiện, ảnh chụp sẽ được cắt theo viền đó. Sau đó, ứng dụng nắn phối cảnh, tăng độ rõ, rồi lưu ảnh hoặc nhiều trang thành PDF.
+SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, camera bật ngay, đưa giấy vào khung hình và bấm một nút lớn. Ứng dụng tự tìm mép giấy, kể cả biên lai nhỏ hoặc tờ giấy ở xa; khi viền xanh xuất hiện, ảnh chụp sẽ được cắt theo viền đó và tự thêm vào giỏ để tiếp tục quét. Nếu không tìm được mép giấy, ứng dụng cho phép chỉnh lại bốn góc trước khi thêm trang. Trong giỏ, bạn có thể đặt tên tài liệu, đổi thứ tự các trang rồi lưu và xuất PDF.
 
 - Ba chế độ: **Màu / Xám / Đen trắng**
-- Chia sẻ ảnh qua bảng Chia sẻ của iPhone (Zalo, Messenger… nếu đã cài)
-- Ghép, đổi thứ tự nhiều trang và xuất một PDF
+- Tự thêm ảnh cắt thành công vào giỏ; hỗ trợ chỉnh bốn góc khi cần
+- Đặt tên tài liệu, ghép, đổi thứ tự nhiều trang và xuất một PDF
 - Thư viện IndexedDB chỉ nằm trên thiết bị; không tài khoản, cloud, quảng cáo, OCR hay theo dõi
 - Giao diện PWA có thể mở ngoại tuyến sau lần tải đầu tiên; bộ quét cần tải OpenCV.js riêng. Camera cần được cấp quyền.
 
@@ -44,4 +44,4 @@ Cả hai dịch vụ cung cấp HTTPS, điều kiện bắt buộc của camera 
 
 ## English (short)
 
-SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, shares or saves images, builds multi-page PDFs, and keeps its gallery locally in IndexedDB. Install from iPhone Safari via **Share → Add to Home Screen**. No accounts, uploads, OCR, analytics, or trackers.
+SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, automatically adds successful scans to a cart, supports manual corner adjustment, and exports named multi-page PDFs. Its gallery stays local in IndexedDB. Install from iPhone Safari via **Share → Add to Home Screen**. No accounts, uploads, OCR, analytics, or trackers.
