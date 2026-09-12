@@ -163,6 +163,35 @@ function findOptimalCorners(canvas) {
   return points
 }
 
+function customExtract(srcCanvas, pts) {
+  const cv = window.cv
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
+  const w = Math.round(Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2])))
+  const h = Math.round(Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2])))
+  
+  const src = cv.imread(srcCanvas)
+  const dst = new cv.Mat()
+  const dsize = new cv.Size(w, h)
+  
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    pts[0].x, pts[0].y, pts[1].x, pts[1].y,
+    pts[2].x, pts[2].y, pts[3].x, pts[3].y
+  ])
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0, w, 0, w, h, 0, h
+  ])
+  
+  const M = cv.getPerspectiveTransform(srcTri, dstTri)
+  cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar())
+  
+  const out = document.createElement('canvas')
+  out.width = w; out.height = h
+  cv.imshow(out, dst)
+  
+  src.delete(); dst.delete(); srcTri.delete(); dstTri.delete(); M.delete()
+  return out
+}
+
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
   const [screen, setScreen] = useState('camera')
@@ -264,20 +293,10 @@ export default function App() {
       const scaledPoints = findOptimalCorners(dc)
       if (scaledPoints) {
         points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
-        
-        const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
-        const w = Math.round(Math.max(dist(points[0], points[1]), dist(points[3], points[2])))
-        const h = Math.round(Math.max(dist(points[0], points[3]), dist(points[1], points[2])))
-
-        out = scan.current.extractPaper(c, w, h, {
-          topLeftCorner: points[0],
-          topRightCorner: points[1],
-          bottomRightCorner: points[2],
-          bottomLeftCorner: points[3],
-        })
       } else {
-        out = scan.current.extractPaper(c, 1600, Math.round(1600 * c.height / c.width))
+        points = fitPoints(c.width, c.height)
       }
+      out = customExtract(c, points)
     } catch { /* fallback below */ }
     if (!out) out = c
 
@@ -305,16 +324,7 @@ export default function App() {
     c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
     let out
     try {
-      const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
-      const w = Math.round(Math.max(dist(draft.points[0], draft.points[1]), dist(draft.points[3], draft.points[2])))
-      const h = Math.round(Math.max(dist(draft.points[0], draft.points[3]), dist(draft.points[1], draft.points[2])))
-
-      out = scan.current.extractPaper(c, w, h, {
-        topLeftCorner: draft.points[0],
-        topRightCorner: draft.points[1],
-        bottomRightCorner: draft.points[2],
-        bottomLeftCorner: draft.points[3],
-      })
+      out = customExtract(c, draft.points)
     } catch { out = c }
 
     const croppedBlob = await blobFrom(out)
