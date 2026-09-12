@@ -229,6 +229,7 @@ export default function App() {
   }, [])
 
   async function startCamera() {
+    activeCornersRef.current = null
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
@@ -267,6 +268,8 @@ export default function App() {
         c.lineTo(pts[3].x, pts[3].y)
         c.closePath()
         c.stroke()
+      } else {
+        activeCornersRef.current = null
       }
     } catch {
       activeCornersRef.current = null
