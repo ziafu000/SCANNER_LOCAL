@@ -40,6 +40,11 @@ button, input {
   font: inherit;
 }
 
+input, textarea, select {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .tap {
   min-height: 48px;
   min-width: 48px;
