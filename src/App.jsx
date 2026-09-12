@@ -75,7 +75,7 @@ function findOptimalCorners(canvas) {
   cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
   let candidates = []
-  const minArea = canvas.width * canvas.height * 0.15
+  const minArea = canvas.width * canvas.height * 0.05
 
   for (let i = 0; i < contours.size(); ++i) {
     const cnt = contours.get(i)
@@ -194,6 +194,7 @@ function customExtract(srcCanvas, pts) {
 
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
+  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (preview coords)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -256,6 +257,7 @@ export default function App() {
     try {
       const pts = findOptimalCorners(o)
       if (pts) {
+        activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
         c.strokeStyle = '#20e3a2'
         c.lineWidth = 7
         c.beginPath()
@@ -266,6 +268,7 @@ export default function App() {
         c.closePath()
         c.stroke()
       } else {
+        activeCornersRef.current = null
         const marked = scan.current.highlightPaper(o, { color: '#20e3a2', thickness: 7 })
         c.drawImage(marked, 0, 0, w, h)
       }
@@ -293,6 +296,13 @@ export default function App() {
       const scaledPoints = findOptimalCorners(dc)
       if (scaledPoints) {
         points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
+      } else if (activeCornersRef.current?.pts) {
+        // High-res detection failed but the live preview had a visible green box —
+        // scale those preview-space corners up to the full-resolution canvas.
+        const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
+        const scaleX = c.width / previewWidth
+        const scaleY = c.height / previewHeight
+        points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
       } else {
         points = fitPoints(c.width, c.height)
       }
