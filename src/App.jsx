@@ -293,6 +293,7 @@ export default function App() {
 
   async function capture() {
     if (!video.current?.videoWidth) return
+    setAdjustError('')
     setStatus('Đang nắn thẳng trang…')
     const c = document.createElement('canvas'), v = video.current
     c.width = v.videoWidth; c.height = v.videoHeight
@@ -410,6 +411,7 @@ export default function App() {
 
   const addPage = () => {
     setPages(p => [...p, { ...draft, id: uid() }])
+    setAdjustError('')
     setDraft(null)
     setScreen('camera')
     setTimeout(startCamera, 100)
@@ -558,7 +560,7 @@ export default function App() {
   /* ───────── Review / Adjust Screen ───────── */
   if (screen === 'review' || screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
-      <Header back={() => { setScreen('camera'); startCamera() }} title={screen === 'adjust' ? 'Chỉnh 4 góc' : 'Trang vừa quét'} />
+      <Header back={() => { setAdjustError(''); setScreen('camera'); startCamera() }} title={screen === 'adjust' ? 'Chỉnh 4 góc' : 'Trang vừa quét'} />
       {screen === 'adjust'
         ? <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
         : <img className="paper-shadow mx-auto max-h-[57vh] rounded bg-white" src={draft.url} alt="Trang vừa quét" />
@@ -580,7 +582,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          <button onClick={() => setScreen('adjust')}
+          <button onClick={() => { setAdjustError(''); setScreen('adjust') }}
             className="tap mt-3 w-full rounded-2xl border-2 border-slate-400 p-3 text-lg font-bold">
             Chỉnh lại 4 góc
           </button>
