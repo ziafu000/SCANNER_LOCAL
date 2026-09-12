@@ -383,13 +383,17 @@ export default function App() {
     processingRef.current = true
     setProcessing(true)
     try {
+      setError('')
       const img = await loadImage(draft.raw)
       const c = document.createElement('canvas')
       c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
       let out
       try {
         out = customExtract(c, draft.points)
-      } catch { out = c }
+      } catch {
+        setError('Không thể nắn thẳng trang. Hãy chỉnh lại 4 góc rồi thử lại.')
+        return
+      }
 
       const filtered = canvasFilter(out, filter)
       const filteredBlob = await blobFrom(filtered)
@@ -426,45 +430,54 @@ export default function App() {
 
   // Export PDF from the current cart (pages[]) and save to gallery
   async function exportCartPdf() {
-    if (!pages.length) return
-    setStatus('Đang tạo PDF…')
-    let pdf = null
-    for (let i = 0; i < pages.length; i++) {
-      const im = await loadImage(pages[i].url)
-      const imgWidth = im.naturalWidth || im.width
-      const imgHeight = im.naturalHeight || im.height
-      const orientation = imgWidth > imgHeight ? 'l' : 'p'
-      
-      if (i === 0) {
-        pdf = new jsPDF({
-          orientation: orientation,
-          unit: 'px',
-          format: [imgWidth, imgHeight],
-          hotfixes: ['px_scaling']
-        })
-      } else {
-        pdf.addPage([imgWidth, imgHeight], orientation)
-      }
-      pdf.addImage(pages[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
-    }
-    const b = pdf.output('blob')
-    const name = docName.trim() || defaultDocName()
-    download(b, `${name}.pdf`)
+    if (processingRef.current || !pages.length) return
+    processingRef.current = true
+    setProcessing(true)
+    const items = [...pages]
+    try {
+      setStatus('Đang tạo PDF…')
+      let pdf = null
+      for (let i = 0; i < items.length; i++) {
+        const im = await loadImage(items[i].url)
+        const imgWidth = im.naturalWidth || im.width
+        const imgHeight = im.naturalHeight || im.height
+        const orientation = imgWidth > imgHeight ? 'l' : 'p'
 
-    const record = {
-      id: uid(),
-      name,
-      createdAt: Date.now(),
-      pages: pages.map(x => x.blob),
+        if (i === 0) {
+          pdf = new jsPDF({
+            orientation: orientation,
+            unit: 'px',
+            format: [imgWidth, imgHeight],
+            hotfixes: ['px_scaling']
+          })
+        } else {
+          pdf.addPage([imgWidth, imgHeight], orientation)
+        }
+        pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
+      }
+      const b = pdf.output('blob')
+      const name = docName.trim() || defaultDocName()
+      download(b, `${name}.pdf`)
+
+      const record = {
+        id: uid(),
+        name,
+        createdAt: Date.now(),
+        pages: items.map(x => x.blob),
+      }
+      await putScan(record)
+      await refreshGallery()
+      items.forEach(page => URL.revokeObjectURL(page.url))
+      setPages([])
+      setDocName(defaultDocName())
+      setScreen('camera')
+      setStatus('Đã lưu PDF trong Thư viện')
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await startCamera()
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
-    await putScan(record)
-    await refreshGallery()
-    pages.forEach(page => URL.revokeObjectURL(page.url))
-    setPages([])
-    setDocName(defaultDocName())
-    setScreen('camera')
-    setStatus('Đã lưu PDF trong Thư viện')
-    setTimeout(startCamera, 100)
   }
 
   // Export PDF from a gallery record (view-only)
@@ -584,7 +597,7 @@ export default function App() {
         <div className="space-y-3">
           {pages.map((p, i) => (
             <div
-              draggable
+              draggable={!processing}
               onDragStart={() => setDrag(i)}
               onDragOver={e => e.preventDefault()}
               onDrop={() => { movePage(drag, i); setDrag(null) }}
@@ -594,12 +607,13 @@ export default function App() {
               <img src={p.url} className="h-24 w-18 rounded object-cover" />
               <b className="flex-1 text-xl">Trang {i + 1}</b>
               <div className="flex flex-col gap-1">
-                <button className="tap text-2xl" onClick={() => movePage(i, i - 1)}>↑</button>
-                <button className="tap text-2xl" onClick={() => movePage(i, i + 1)}>↓</button>
+                <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i - 1)}>↑</button>
+                <button disabled={processing} className="tap text-2xl disabled:opacity-50" onClick={() => movePage(i, i + 1)}>↓</button>
               </div>
               <button
                 aria-label="Xóa trang"
-                className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl"
+                disabled={processing}
+                className="tap rounded-xl bg-slate-700 px-3 py-2 text-2xl disabled:opacity-50"
                 onClick={() => removePage(i)}
               >
                 🗑
@@ -610,7 +624,8 @@ export default function App() {
       )}
       {pages.length > 0 && (
         <button
-          className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950"
+          disabled={processing}
+          className="tap mt-5 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950 disabled:opacity-50"
           onClick={exportCartPdf}
         >
           Xong &amp; Xuất PDF
@@ -622,8 +637,9 @@ export default function App() {
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
-      <Header back={() => { setDraft(null); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+      <Header back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
       <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
+      {error && <p className="mt-3 rounded-xl bg-red-950 p-3 text-red-200">{error}</p>}
       {/* Filter selection while adjusting */}
       <div className="mt-4 grid grid-cols-3 gap-2">
         {[['color', 'Màu'], ['gray', 'Xám'], ['bw', 'Đen trắng']].map(([k, n]) => (
