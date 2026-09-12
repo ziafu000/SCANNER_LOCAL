@@ -5,7 +5,7 @@
 - **Goal:** Single-file/multi-page scanning utility with focus on iPhone Safari iOS. Simple, fast, no external dependencies (authentication/storage).
 - **Project Structure:**
   - `public/`: Assets, OpenCV, icons, manifest/PWA icons.
-  - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Review -> Adjust -> Gallery/Pages.
+  - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Adjust/Cart -> Gallery/Pages.
   - `db.js`: IndexedDB wrapper for local gallery.
 - **Workflow:**
   - Camera preview uses camera stream -> `requestAnimationFrame` -> `jscanify`.
