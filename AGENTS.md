@@ -8,7 +8,7 @@
   - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Confirm/Adjust -> Cart -> Gallery/View.
   - `db.js`: IndexedDB wrapper for local gallery.
 - **Workflow:**
-  - Camera preview uses camera stream -> `requestAnimationFrame` -> `jscanify`.
+  - Camera preview renders the native video independently; `requestAnimationFrame` draws the latest edge overlay while a dedicated Web Worker runs throttled OpenCV detection on downscaled frames.
   - Capture -> `canvas` -> `extractPaper` (OpenCV perspective warp) -> Filter (custom image processing) -> user confirmation -> Cart.
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page -> `jspdf` generates blobs locally.
