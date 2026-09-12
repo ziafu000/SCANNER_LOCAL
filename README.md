@@ -6,7 +6,7 @@ SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, 
 - Chia sẻ ảnh qua bảng Chia sẻ của iPhone (Zalo, Messenger… nếu đã cài)
 - Ghép, đổi thứ tự nhiều trang và xuất một PDF
 - Thư viện IndexedDB chỉ nằm trên thiết bị; không tài khoản, cloud, quảng cáo, OCR hay theo dõi
-- Hoạt động ngoại tuyến sau lần tải đầu tiên. Camera cần được cấp quyền.
+- Giao diện cốt lõi có thể mở ngoại tuyến sau lần tải đầu tiên; bộ quét cần OpenCV.js còn trong bộ nhớ đệm của trình duyệt hoặc có kết nối mạng. Camera cần được cấp quyền.
 
 ## Mẹ cài trên iPhone
 
@@ -15,7 +15,7 @@ SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, 
 3. Kéo xuống và chọn **Thêm vào Màn hình chính**.
 4. Bấm **Thêm**, sau đó mở biểu tượng SCANNER và chọn **Cho phép Camera**.
 
-Lần mở đầu có dòng “Đang tải bộ quét…” vì trình duyệt tải OpenCV.js; tệp này được service worker lưu lại cho những lần sau.
+Nút chụp chỉ bật sau khi camera và OpenCV.js đều sẵn sàng. OpenCV.js không nằm trong bộ nhớ đệm ngoại tuyến của service worker vì tệp lớn; trình duyệt có thể tải lại tệp này khi cần. Khi phiên bản PWA mới tiếp quản, ứng dụng tự tải lại để áp dụng bản mới.
 
 ## Chạy tại máy
 

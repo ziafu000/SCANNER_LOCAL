@@ -9,7 +9,7 @@
   - `db.js`: IndexedDB wrapper for local gallery.
 - **Workflow:**
   - Camera preview uses camera stream -> `requestAnimationFrame` -> `jscanify`.
-  - Capture -> `canvas` -> `extractPaper` (OpenCV perspective warp) -> Filter (custom image processing).
+  - Capture -> `canvas` -> OpenCV perspective warp -> Filter (custom image processing).
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page -> `jspdf` generates blobs locally.
 - **PWA/Deployment:**
