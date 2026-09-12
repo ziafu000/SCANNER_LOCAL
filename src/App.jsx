@@ -215,6 +215,8 @@ export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
   // Offscreen canvas for downscaled OpenCV detection (~360px wide)
   const offscreen = useRef(null)
+  const detectionWorker = useRef(null)
+  const detectionRequest = useRef(0)
   // Flag: true while an async detection pass is running (prevents re-entrancy)
   const isDetecting = useRef(false)
   // Timestamp of the last detection kick-off (ms) — used for throttling
@@ -259,6 +261,23 @@ export default function App() {
     pagesRef.current = pages
   }, [pages])
 
+  useEffect(() => {
+    const worker = new Worker(`${import.meta.env.BASE_URL}detection-worker.js`)
+    detectionWorker.current = worker
+    worker.onmessage = ({ data }) => {
+      if (data.id !== detectionRequest.current) return
+      activeCornersRef.current = data.points?.map(p => ({
+        x: p.x / data.width,
+        y: p.y / data.height,
+      })) ?? null
+      isDetecting.current = false
+    }
+    worker.onerror = () => {
+      isDetecting.current = false
+    }
+    return () => worker.terminate()
+  }, [])
+
   useEffect(() => () => {
     pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
   }, [])
@@ -301,6 +320,7 @@ export default function App() {
   async function startCamera() {
     activeCornersRef.current = null
     isDetecting.current = false
+    detectionRequest.current++
     lastDetectTime.current = 0
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
@@ -346,27 +366,16 @@ export default function App() {
       if (!offscreen.current) offscreen.current = document.createElement('canvas')
       const oc = offscreen.current
       if (oc.width !== dw || oc.height !== dh) { oc.width = dw; oc.height = dh }
-      oc.getContext('2d').drawImage(v, 0, 0, dw, dh)
-
-      // Run detection off the rAF critical path via a microtask
-      Promise.resolve().then(() => {
-        try {
-          const rawPts = findOptimalCorners(oc)
-          if (rawPts) {
-            const normalizedPts = rawPts.map(p => ({
-              x: p.x / dw,
-              y: p.y / dh,
-            }))
-            activeCornersRef.current = normalizedPts
-          } else {
-            activeCornersRef.current = null
-          }
-        } catch {
-          activeCornersRef.current = null
-        } finally {
-          isDetecting.current = false
-        }
-      })
+      const context = oc.getContext('2d')
+      context.drawImage(v, 0, 0, dw, dh)
+      const id = ++detectionRequest.current
+      const imageData = context.getImageData(0, 0, dw, dh)
+      detectionWorker.current?.postMessage({
+        id,
+        width: dw,
+        height: dh,
+        imageData,
+      }, [imageData.data.buffer])
     }
 
     // Draw the overlay (document boundary) using the most recently detected corners
@@ -422,8 +431,7 @@ export default function App() {
       let detectionGood = false
 
       try {
-        // Run detection on the same 360px offscreen canvas used during preview
-        const DETECT_MAX = 360
+        const DETECT_MAX = 700
         const detScale = Math.min(1, DETECT_MAX / c.width)
         const dw = Math.round(c.width * detScale)
         const dh = Math.round(c.height * detScale)
