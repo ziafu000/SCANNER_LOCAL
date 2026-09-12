@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "idb": "^8.0.0",
     "jscanify": "1.4.3",
     "jspdf": "^2.5.2",
