@@ -6,7 +6,7 @@ SCANNER là máy quét tài liệu PWA dành cho gia đình: mở ứng dụng, 
 - Xem lại ảnh đã cắt để xác nhận thêm vào giỏ hoặc chụp lại; hỗ trợ chỉnh bốn góc khi cần
 - Xem toàn màn hình từng trang trong giỏ và khi mở tài liệu từ thư viện
 - Đặt tên tài liệu, ghép, đổi thứ tự nhiều trang và xuất một PDF
-- Thư viện IndexedDB chỉ nằm trên thiết bị; không tài khoản, cloud, quảng cáo, OCR hay theo dõi
+- Tài liệu trong thư viện IndexedDB chỉ nằm trên thiết bị; không tài khoản, tải tài liệu lên cloud, quảng cáo hay OCR. Ứng dụng dùng Vercel Web Analytics để thống kê lượt sử dụng.
 - Giao diện PWA có thể mở ngoại tuyến sau lần tải đầu tiên; bộ quét cần tải OpenCV.js riêng. Camera cần được cấp quyền.
 
 ## Mẹ cài trên iPhone
@@ -45,4 +45,4 @@ Cả hai dịch vụ cung cấp HTTPS, điều kiện bắt buộc của camera 
 
 ## English (short)
 
-SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, lets users review and confirm or retake each scan, supports manual corner adjustment, and exports named multi-page PDFs. Cart and gallery-document thumbnails open in a fullscreen preview. Its gallery stays local in IndexedDB. Install from iPhone Safari via **Share → Add to Home Screen**. No accounts, uploads, OCR, analytics, or trackers.
+SCANNER is a camera-first, Vietnamese family document-scanning PWA. It detects paper edges with jscanify/OpenCV.js, corrects perspective, applies Color/Gray/B&W filters, lets users review and confirm or retake each scan, supports manual corner adjustment, and exports named multi-page PDFs. Cart and gallery-document thumbnails open in a fullscreen preview. Its gallery stays local in IndexedDB, and documents are not uploaded to cloud storage. Install from iPhone Safari via **Share → Add to Home Screen**. There are no accounts, ads, or OCR; the app uses Vercel Web Analytics for usage statistics.
