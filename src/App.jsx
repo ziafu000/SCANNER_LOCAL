@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import JScanify from 'jscanify/client'
 import { jsPDF } from 'jspdf'
 import { listScans, putScan, removeScan } from './db'
+import { Analytics } from '@vercel/analytics/react'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
@@ -521,6 +522,7 @@ export default function App() {
 
   /* ───────── Gallery Screen ───────── */
   if (screen === 'gallery') return (
+    <>
     <main className="safe min-h-full bg-slate-950 p-5">
       <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện" />
       <p className="mb-5 text-slate-300">Chỉ lưu trên điện thoại này. Không tải lên mạng.</p>
@@ -550,12 +552,15 @@ export default function App() {
         </div>
       )}
     </main>
+    <Analytics />
+    </>
   )
 
   /* ───────── Gallery View Screen (read-only record viewer) ───────── */
   if (screen === 'gallery-view') {
     const rec = viewRecord
     return (
+      <>
       <main className="safe min-h-full bg-slate-950 p-5">
         <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
         <p className="mb-4 text-slate-300">{rec?.pages.length ?? 0} trang · {rec ? label(rec.createdAt) : ''}</p>
@@ -572,11 +577,14 @@ export default function App() {
           Xuất PDF lại
         </button>
       </main>
+      <Analytics />
+      </>
     )
   }
 
   /* ───────── Cart Screen (active scan session) ───────── */
   if (screen === 'cart') return (
+    <>
     <main className="safe min-h-full bg-slate-950 p-5">
       <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
       {/* Editable document name */}
@@ -632,10 +640,13 @@ export default function App() {
         </button>
       )}
     </main>
+    <Analytics />
+    </>
   )
 
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
+    <>
     <main className="safe min-h-full bg-slate-950 p-4">
       <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
       <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
@@ -653,10 +664,13 @@ export default function App() {
         Áp dụng 4 góc
       </button>
     </main>
+    <Analytics />
+    </>
   )
 
   /* ───────── Camera Screen (default) ───────── */
   return (
+    <>
     <main className="safe flex min-h-full flex-col bg-slate-950">
       <header className="flex items-center justify-between px-5">
         <div>
@@ -701,6 +715,8 @@ export default function App() {
         <p className="mt-3 text-sm text-slate-300">Không có tài khoản · Không tải ảnh lên mạng</p>
       </div>
     </main>
+    <Analytics />
+    </>
   )
 }
 
