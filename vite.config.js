@@ -24,7 +24,11 @@ export default defineConfig({
     },
     workbox: {
       globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+      globIgnores: ['**/opencv.js'],
       maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+      skipWaiting: true,
+      clientsClaim: true,
+      cleanupOutdatedCaches: true,
       runtimeCaching: [
         { urlPattern: /^https:\/\/docs\.opencv\.org\/.*/i, handler: 'CacheFirst', options: { cacheName: 'opencv-cache', expiration: { maxEntries: 5, maxAgeSeconds: 60*60*24*30 } } }
       ]

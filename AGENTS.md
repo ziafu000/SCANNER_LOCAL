@@ -13,7 +13,7 @@
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page -> `jspdf` generates blobs locally.
 - **PWA/Deployment:**
-  - `vite-plugin-pwa` handles service worker generation (caching all assets).
+  - `vite-plugin-pwa` generates an auto-updating service worker that precaches the app shell but excludes the large local `opencv.js` binary.
   - HTTPS requirement: Essential for `getUserMedia`.
 
 ## Maintaining this file
