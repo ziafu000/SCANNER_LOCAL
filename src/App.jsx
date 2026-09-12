@@ -200,6 +200,7 @@ export default function App() {
   const [isOpenCvLoaded, setIsOpenCvLoaded] = useState(false)
   const [isCameraPlaying, setIsCameraPlaying] = useState(false)
   const [error, setError] = useState('')
+  const [adjustError, setAdjustError] = useState('')
   // draft: { blob, url, raw (objectURL of original capture), cropped (objectURL of perspective-corrected unfiltered), points }
   const [draft, setDraft] = useState(null)
   const [pages, setPages] = useState([])
@@ -373,25 +374,27 @@ export default function App() {
   }
 
   async function applyManual() {
-    const img = await loadImage(draft.raw)
-    const c = document.createElement('canvas')
-    c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
-    let out
+    setAdjustError('')
     try {
-      out = customExtract(c, draft.points)
-    } catch { out = c }
+      const img = await loadImage(draft.raw)
+      const c = document.createElement('canvas')
+      c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
+      const out = customExtract(c, draft.points)
 
-    const croppedBlob = await blobFrom(out)
-    const filtered = canvasFilter(out, filter)
-    const filteredBlob = await blobFrom(filtered)
+      const croppedBlob = await blobFrom(out)
+      const filtered = canvasFilter(out, filter)
+      const filteredBlob = await blobFrom(filtered)
 
-    setDraft(d => ({
-      ...d,
-      blob: filteredBlob,
-      url: urlOf(filteredBlob),
-      cropped: urlOf(croppedBlob),
-    }))
-    setScreen('review')
+      setDraft(d => ({
+        ...d,
+        blob: filteredBlob,
+        url: urlOf(filteredBlob),
+        cropped: urlOf(croppedBlob),
+      }))
+      setScreen('review')
+    } catch {
+      setAdjustError('Không thể nắn thẳng ảnh. Hãy chỉnh lại 4 góc rồi thử lại.')
+    }
   }
 
   // Re-apply filter from the cropped (perspective-corrected, unfiltered) source
@@ -560,6 +563,9 @@ export default function App() {
         ? <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
         : <img className="paper-shadow mx-auto max-h-[57vh] rounded bg-white" src={draft.url} alt="Trang vừa quét" />
       }
+      {screen === 'adjust' && adjustError && (
+        <p role="alert" className="mt-3 rounded-xl bg-red-950 p-3 text-center text-red-200">{adjustError}</p>
+      )}
       {screen === 'adjust' ? (
         <button className="tap mt-4 w-full rounded-2xl bg-emerald-400 p-4 text-xl font-black text-slate-950" onClick={applyManual}>
           Áp dụng 4 góc
@@ -647,6 +653,7 @@ function Adjust({ image, points, setPoints }) {
   const ref = useRef()
   const imgRef = useRef()
   const dragIdx = useRef(null)
+  const [dimensions, setDimensions] = useState(null)
 
   const update = e => {
     if (dragIdx.current === null) return
@@ -661,15 +668,21 @@ function Adjust({ image, points, setPoints }) {
 
   return (
     <div ref={ref} onPointerMove={update} onPointerUp={() => dragIdx.current = null} className="relative mx-auto max-h-[65vh] w-fit">
-      <img ref={imgRef} src={image} className="max-h-[65vh] max-w-full" alt="Ảnh gốc" />
-      {points.map((p, i) => (
+      <img
+        ref={imgRef}
+        src={image}
+        onLoad={e => setDimensions({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+        className="max-h-[65vh] max-w-full"
+        alt="Ảnh gốc"
+      />
+      {dimensions && points.map((p, i) => (
         <button key={i}
           onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
           aria-label={`Góc ${i + 1}`}
           className="corner absolute h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-emerald-400"
           style={{
-            left: `${(p.x / (imgRef.current?.naturalWidth || 1)) * 100}%`,
-            top: `${(p.y / (imgRef.current?.naturalHeight || 1)) * 100}%`,
+            left: `${(p.x / dimensions.width) * 100}%`,
+            top: `${(p.y / dimensions.height) * 100}%`,
           }}
         />
       ))}
