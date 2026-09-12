@@ -200,10 +200,9 @@ export default function App() {
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
-  // draft: { blob, url, raw (objectURL of original capture), cropped (objectURL of perspective-corrected unfiltered), points }
-  // draft is only used on the 'adjust' screen now
   const [draft, setDraft] = useState(null)
   const [pages, setPages] = useState([])
+  const pagesRef = useRef([])
   const [filter, setFilter] = useState('color')
   const [gallery, setGallery] = useState([])
   const [drag, setDrag] = useState(null)
@@ -227,6 +226,21 @@ export default function App() {
     setViewedPages(nextPages)
     return () => nextPages.forEach(page => URL.revokeObjectURL(page.url))
   }, [viewRecord])
+
+  useEffect(() => {
+    pagesRef.current = pages
+  }, [pages])
+
+  useEffect(() => () => {
+    pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
+  }, [])
+
+  useEffect(() => {
+    const rawUrl = draft?.raw
+    return () => {
+      if (rawUrl) URL.revokeObjectURL(rawUrl)
+    }
+  }, [draft?.raw])
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
@@ -337,37 +351,23 @@ export default function App() {
           const scaleY = c.height / previewHeight
           points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
           detectionGood = true
-        } else {
-          points = fitPoints(c.width, c.height)
         }
-        out = customExtract(c, points)
+        if (points) out = customExtract(c, points)
       } catch {
         detectionGood = false
       }
-      if (!out) out = c
-
-      const rawBlob = await blobFrom(c)
-      const croppedBlob = await blobFrom(out)
-      const filtered = canvasFilter(out, 'color')
-      const filteredBlob = await blobFrom(filtered)
-
-      const draftData = {
-        blob: filteredBlob,
-        url: urlOf(filteredBlob),
-        raw: urlOf(rawBlob),
-        cropped: urlOf(croppedBlob),
-        points: points || fitPoints(c.width, c.height),
-      }
 
       if (detectionGood) {
-        setPages(p => [...p, { ...draftData, id: uid() }])
+        const filteredBlob = await blobFrom(canvasFilter(out, 'color'))
+        setPages(p => [...p, { id: uid(), blob: filteredBlob, url: urlOf(filteredBlob) }])
         showToast(`Đã thêm trang ${pages.length + 1}`)
         setFilter('color')
         setStatus('Đưa tờ giấy vào khung xanh')
         await new Promise(resolve => setTimeout(resolve, 100))
         await startCamera()
       } else {
-        setDraft(draftData)
+        const rawBlob = await blobFrom(c)
+        setDraft({ raw: urlOf(rawBlob), points: fitPoints(c.width, c.height) })
         setFilter('color')
         setScreen('adjust')
         setStatus('Chỉnh lại 4 góc')
@@ -391,16 +391,13 @@ export default function App() {
         out = customExtract(c, draft.points)
       } catch { out = c }
 
-      const croppedBlob = await blobFrom(out)
       const filtered = canvasFilter(out, filter)
       const filteredBlob = await blobFrom(filtered)
 
       const newPage = {
-        ...draft,
+        id: uid(),
         blob: filteredBlob,
         url: urlOf(filteredBlob),
-        cropped: urlOf(croppedBlob),
-        id: uid(),
       }
 
       setPages(p => {
@@ -417,17 +414,6 @@ export default function App() {
       processingRef.current = false
       setProcessing(false)
     }
-  }
-
-  // Re-apply filter from the cropped (perspective-corrected, unfiltered) source
-  async function changeFilter(kind) {
-    setFilter(kind)
-    const im = await loadImage(draft.cropped)
-    const c = document.createElement('canvas')
-    c.width = im.width; c.height = im.height; c.getContext('2d').drawImage(im, 0, 0)
-    const filtered = canvasFilter(c, kind)
-    const b = await blobFrom(filtered)
-    setDraft(d => ({ ...d, blob: b, url: urlOf(b) }))
   }
 
   const download = (blob, name) => {
@@ -473,6 +459,7 @@ export default function App() {
     }
     await putScan(record)
     await refreshGallery()
+    pages.forEach(page => URL.revokeObjectURL(page.url))
     setPages([])
     setDocName(defaultDocName())
     setScreen('camera')
@@ -510,6 +497,7 @@ export default function App() {
   }
 
   function removePage(idx) {
+    URL.revokeObjectURL(pages[idx].url)
     setPages(p => p.filter((_, i) => i !== idx))
   }
 
@@ -634,7 +622,7 @@ export default function App() {
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
     <main className="safe min-h-full bg-slate-950 p-4">
-      <Header back={() => { setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+      <Header back={() => { setDraft(null); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
       <Adjust image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
       {/* Filter selection while adjusting */}
       <div className="mt-4 grid grid-cols-3 gap-2">
@@ -660,14 +648,12 @@ export default function App() {
           <p className="text-sm text-emerald-300">{status}</p>
         </div>
         <div className="flex gap-2">
-          {pages.length > 0 && (
-            <button
-              onClick={() => { stopped(); setScreen('cart') }}
-              className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300"
-            >
-              🛒 {pages.length} trang
-            </button>
-          )}
+          <button
+            onClick={() => { stopped(); setScreen('cart') }}
+            className="tap rounded-xl border border-emerald-400 bg-emerald-400/10 px-3 py-2 font-bold text-emerald-300"
+          >
+            🛒 {pages.length} trang
+          </button>
           <button onClick={() => { stopped(); setScreen('gallery') }} className="tap rounded-xl border border-slate-500 px-3 py-2 font-bold">Thư viện</button>
         </div>
       </header>
