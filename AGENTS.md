@@ -13,8 +13,11 @@
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page -> `jspdf` generates blobs locally.
 - **PWA/Deployment:**
-  - `vite-plugin-pwa` handles service worker generation (caching all assets).
+  - `vite-plugin-pwa` handles service worker generation. `vite.config.js` Workbox config uses `skipWaiting`, `clientsClaim`, `cleanupOutdatedCaches`. `opencv.js` excluded from precache via `globIgnores` to prevent cache bloat.
+  - `main.jsx` registers a `controllerchange` listener on `navigator.serviceWorker` to `window.location.reload()` when a new SW takes control.
   - HTTPS requirement: Essential for `getUserMedia`.
+- **Readiness Gate:** Camera screen has `isScannerReady = isOpenCvLoaded && isCameraPlaying`. The capture button is disabled and pulses until both flags are true. `isCameraPlaying` is set inside the `video.onplaying` event (not after `await play()`).
+- **Capture Fallback:** On capture, contour detection runs on scaled preview frame first, then retries on full-res frame. If detection fails entirely, the app navigates to the manual `adjust` screen instead of silently saving a full-frame distorted image.
 
 ## Maintaining this file
 - **Goal:** Keep developer-only architectural context, avoiding product/audience descriptions properly housed in `README.md`.
