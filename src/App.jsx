@@ -663,8 +663,6 @@ export default function App() {
   if (screen === 'gallery') return (
     <main className="safe min-h-full bg-slate-950 p-5 flex flex-col">
       <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện tài liệu" />
-      <p className="mb-5 text-sm text-slate-400">Tài liệu lưu cục bộ trên máy này. Riêng tư &amp; an toàn tuyệt đối.</p>
-
       {gallery.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center rounded-3xl border border-white/10 bg-slate-900/40 p-10 text-center backdrop-blur-xl">
           <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full glass-pill text-slate-400">
@@ -1009,9 +1007,6 @@ export default function App() {
           </button>
         </div>
 
-        <p className="mt-3 text-[11px] text-slate-500 font-medium">
-          Xử lý trực tiếp trên thiết bị · An toàn &amp; Bảo mật
-        </p>
       </div>
     </main>
   )
@@ -1050,30 +1045,32 @@ function Adjust({ image, points, setPoints }) {
   }
 
   return (
-    <div
-      ref={ref}
-      onPointerMove={update}
-      onPointerUp={() => dragIdx.current = null}
-      className="relative mx-auto max-h-[62vh] w-fit rounded-2xl overflow-hidden glass-panel p-2 shadow-2xl"
-    >
-      <img
-        src={image}
-        onLoad={e => setImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
-        className="max-h-[60vh] max-w-full rounded-xl object-contain"
-        alt="Ảnh gốc"
-      />
-      {imageSize && points.map((p, i) => (
-        <button
-          key={i}
-          onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
-          aria-label={`Góc ${i + 1}`}
-          className="corner absolute h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white bg-emerald-400 shadow-xl ring-4 ring-black/30 active:scale-125 transition-transform"
-          style={{
-            left: `${(p.x / imageSize.width) * 100}%`,
-            top: `${(p.y / imageSize.height) * 100}%`,
-          }}
+    <div className="mx-auto max-h-[62vh] w-fit rounded-2xl overflow-hidden glass-panel p-2 shadow-2xl">
+      <div
+        ref={ref}
+        onPointerMove={update}
+        onPointerUp={() => dragIdx.current = null}
+        className="relative w-fit"
+      >
+        <img
+          src={image}
+          onLoad={e => setImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+          className="block max-h-[60vh] max-w-full rounded-xl object-contain"
+          alt="Ảnh gốc"
         />
-      ))}
+        {imageSize && points.map((p, i) => (
+          <button
+            key={i}
+            onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
+            aria-label={`Góc ${i + 1}`}
+            className="corner absolute h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white bg-emerald-400 shadow-xl ring-4 ring-black/30 active:scale-125 transition-transform"
+            style={{
+              left: `${(p.x / imageSize.width) * 100}%`,
+              top: `${(p.y / imageSize.height) * 100}%`,
+            }}
+          />
+        ))}
+      </div>
     </div>
   )
 }
