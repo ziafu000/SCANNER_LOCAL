@@ -76,110 +76,204 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
+function isReasonableQuad(pts) {
+  if (!pts || pts.length !== 4) return false
+  const [tl, tr, br, bl] = pts
+  const top = Math.hypot(tr.x - tl.x, tr.y - tl.y)
+  const right = Math.hypot(br.x - tr.x, br.y - tr.y)
+  const bottom = Math.hypot(br.x - bl.x, br.y - bl.y)
+  const left = Math.hypot(bl.x - tl.x, bl.y - tl.y)
+
+  if (top < 15 || bottom < 15 || left < 15 || right < 15) return false
+
+  const widthRatio = Math.min(top, bottom) / Math.max(top, bottom)
+  const heightRatio = Math.min(left, right) / Math.max(left, right)
+  if (widthRatio < 0.35 || heightRatio < 0.35) return false
+
+  const avgWidth = (top + bottom) / 2
+  const avgHeight = (left + right) / 2
+  const ar = avgWidth / avgHeight
+  if (ar < 0.2 || ar > 5.0) return false
+
+  return true
+}
+
+function getMinAreaRectPoints(cv, cnt) {
+  const pts = []
+  const rect = cv.minAreaRect(cnt)
+  let usedBoxPoints = false
+  if (cv.boxPoints) {
+    let box = null
+    try {
+      box = new cv.Mat()
+      cv.boxPoints(rect, box)
+      for (let j = 0; j < 4; j++) {
+        pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
+      }
+      usedBoxPoints = true
+    } catch (e) {
+      console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+    } finally {
+      if (box) box.delete()
+    }
+  }
+
+  if (!usedBoxPoints) {
+    const cx = rect.center.x, cy = rect.center.y
+    const w = rect.size.width / 2, h = rect.size.height / 2
+    const angle = (rect.angle * Math.PI) / 180.0
+    const cosA = Math.cos(angle), sinA = Math.sin(angle)
+    const offsets = [
+      { x: -w, y: -h },
+      { x: w, y: -h },
+      { x: w, y: h },
+      { x: -w, y: h }
+    ]
+    for (const p of offsets) {
+      pts.push({
+        x: cx + p.x * cosA - p.y * sinA,
+        y: cy + p.x * sinA + p.y * cosA
+      })
+    }
+  }
+  return orderPoints(pts)
+}
+
+function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea, maxArea) {
+  let edged = null
+  let contours = null
+  let hierarchy = null
+  let hull = null
+  let approx = null
+  const candidates = []
+  let detectedQuad = null
+  let largestCnt = null
+  let largestArea = 0
+
+  try {
+    edged = new cv.Mat()
+    contours = new cv.MatVector()
+    hierarchy = new cv.Mat()
+    hull = new cv.Mat()
+    approx = new cv.Mat()
+
+    cv.Canny(gray, edged, lowThresh, highThresh)
+    cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
+    cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    const numContours = contours.size()
+    for (let i = 0; i < numContours; ++i) {
+      const cnt = contours.get(i)
+      const area = cv.contourArea(cnt)
+      if (area > minArea && area < maxArea) {
+        candidates.push({ area, cnt: cnt.clone() })
+      }
+      cnt.delete()
+    }
+
+    candidates.sort((a, b) => b.area - a.area)
+
+    for (const candidate of candidates) {
+      cv.convexHull(candidate.cnt, hull, false, true)
+      const peri = cv.arcLength(hull, true)
+      if (peri <= 0) continue
+
+      for (const eps of [0.015, 0.02, 0.025, 0.03, 0.04]) {
+        cv.approxPolyDP(hull, approx, eps * peri, true)
+        if (approx.rows === 4 && cv.isContourConvex(approx)) {
+          const approxArea = Math.abs(cv.contourArea(approx))
+          if (approxArea >= minArea && approxArea <= maxArea) {
+            const pts = []
+            for (let j = 0; j < 4; j++) {
+              pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+            }
+            const ordered = orderPoints(pts)
+            if (isReasonableQuad(ordered)) {
+              detectedQuad = ordered
+              break
+            }
+          }
+        }
+      }
+      if (detectedQuad) break
+    }
+
+    if (candidates.length > 0) {
+      largestArea = candidates[0].area
+      largestCnt = candidates[0].cnt.clone()
+    }
+  } finally {
+    for (const c of candidates) {
+      c.cnt.delete()
+    }
+    if (approx) approx.delete()
+    if (hull) hull.delete()
+    if (hierarchy) hierarchy.delete()
+    if (contours) contours.delete()
+    if (edged) edged.delete()
+  }
+
+  return { quad: detectedQuad, largestCnt, largestArea }
+}
+
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
-  const src = cv.imread(canvas)
-  const gray = new cv.Mat()
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-  const edged = new cv.Mat()
-  cv.Canny(gray, edged, 75, 200)
+  const cv = window.cv
+  const totalArea = canvas.width * canvas.height
+  const minArea = totalArea * 0.05
+  const maxArea = totalArea * 0.85
 
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
-  cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
-  kernel.delete()
+  let src = null
+  let gray = null
+  let kernel = null
+  let fallbackCnt = null
+  let fallbackArea = 0
 
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
-  cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+  try {
+    src = cv.imread(canvas)
+    gray = new cv.Mat()
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
 
-  let candidates = []
-  const minArea = canvas.width * canvas.height * 0.05
-
-  for (let i = 0; i < contours.size(); ++i) {
-    const cnt = contours.get(i)
-    const area = cv.contourArea(cnt)
-    if (area > minArea) {
-      candidates.push({ area, cnt: cnt.clone() })
+    // Pass 1: Standard Contrast (30, 90)
+    const pass1 = extractCandidateQuad(cv, gray, kernel, 30, 90, minArea, maxArea)
+    if (pass1.quad) {
+      if (pass1.largestCnt) pass1.largestCnt.delete()
+      return pass1.quad
     }
-    cnt.delete()
-  }
+    fallbackCnt = pass1.largestCnt
+    fallbackArea = pass1.largestArea
 
-  candidates.sort((a, b) => b.area - a.area)
-
-  let points = null
-  let fallbackPoints = null
-
-  for (let i = 0; i < candidates.length; i++) {
-    const { cnt } = candidates[i]
-    const peri = cv.arcLength(cnt, true)
-    const approx = new cv.Mat()
-    cv.approxPolyDP(cnt, approx, 0.02 * peri, true)
-
-    if (approx.rows === 4) {
-      const pts = []
-      for (let j = 0; j < 4; j++) {
-        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
-      }
-      points = orderPoints(pts)
-      approx.delete()
-      break
-    } else if (i === 0) {
-      const pts = []
-      const rect = cv.minAreaRect(cnt)
-      let usedBoxPoints = false
-      if (cv.boxPoints) {
-        try {
-          const box = new cv.Mat()
-          cv.boxPoints(rect, box)
-          for (let j = 0; j < 4; j++) {
-            pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
-          }
-          box.delete()
-          usedBoxPoints = true
-        } catch (e) {
-          console.warn('cv.boxPoints failed, falling back to manual calculation', e)
-        }
-      }
-
-      if (!usedBoxPoints) {
-        const cx = rect.center.x, cy = rect.center.y
-        const w = rect.size.width / 2, h = rect.size.height / 2
-        const angle = (rect.angle * Math.PI) / 180.0
-        const cosA = Math.cos(angle), sinA = Math.sin(angle)
-        const offsets = [
-          { x: -w, y: -h },
-          { x: w, y: -h },
-          { x: w, y: h },
-          { x: -w, y: h }
-        ]
-        for (const p of offsets) {
-          pts.push({
-            x: cx + p.x * cosA - p.y * sinA,
-            y: cy + p.x * sinA + p.y * cosA
-          })
-        }
-      }
-      fallbackPoints = orderPoints(pts)
+    // Pass 2: Sensitive Low-Contrast Fallback (12, 36)
+    const pass2 = extractCandidateQuad(cv, gray, kernel, 12, 36, minArea, maxArea)
+    if (pass2.quad) {
+      if (pass2.largestCnt) pass2.largestCnt.delete()
+      return pass2.quad
     }
-    approx.delete()
+
+    if (pass2.largestCnt) {
+      if (!fallbackCnt || pass2.largestArea > fallbackArea) {
+        if (fallbackCnt) fallbackCnt.delete()
+        fallbackCnt = pass2.largestCnt
+        fallbackArea = pass2.largestArea
+      } else {
+        pass2.largestCnt.delete()
+      }
+    }
+
+    // Fallback: minAreaRect on largest candidate if multi-epsilon approximation failed
+    if (fallbackCnt) {
+      return getMinAreaRectPoints(cv, fallbackCnt)
+    }
+
+    return null
+  } finally {
+    if (fallbackCnt) fallbackCnt.delete()
+    if (kernel) kernel.delete()
+    if (gray) gray.delete()
+    if (src) src.delete()
   }
-
-  if (!points && fallbackPoints) {
-    points = fallbackPoints
-  }
-
-  for (const c of candidates) {
-    c.cnt.delete()
-  }
-
-  contours.delete()
-  hierarchy.delete()
-  edged.delete()
-  gray.delete()
-  src.delete()
-
-  return points
 }
 
 function customExtract(srcCanvas, pts) {
