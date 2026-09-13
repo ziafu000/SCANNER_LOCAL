@@ -78,57 +78,66 @@ function orderPoints(pts) {
 
 function isValidQuad(points, totalArea) {
   if (!points || points.length !== 4) return false
-  // Check distinct points
+
+  // Distinct corners check
   for (let i = 0; i < 4; i++) {
     for (let j = i + 1; j < 4; j++) {
-      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 10) return false
+      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 15) return false
     }
   }
-  // Area check via Shoelace formula
+
+  // Shoelace area check: must be 15% to 85% of totalArea
   let signedArea = 0
   for (let i = 0; i < 4; i++) {
     const next = points[(i + 1) % 4]
     signedArea += points[i].x * next.y - next.x * points[i].y
   }
   const area = Math.abs(signedArea) * 0.5
-  if (totalArea !== undefined && (area < 0.08 * totalArea || area > 0.90 * totalArea)) return false
-  if (totalArea === undefined && area < 1) return false
+  if (area < 0.15 * totalArea || area > 0.85 * totalArea) return false
 
-  // Strict convexity and angle bounds
+  // Edge lengths and Aspect Ratio check
+  const edgeLens = []
+  for (let i = 0; i < 4; i++) {
+    const next = points[(i + 1) % 4]
+    edgeLens.push(Math.hypot(next.x - points[i].x, next.y - points[i].y))
+  }
+  const top = edgeLens[0], right = edgeLens[1], bottom = edgeLens[2], left = edgeLens[3]
+  const avgW = (top + bottom) / 2
+  const avgH = (left + right) / 2
+  if (avgW <= 0 || avgH <= 0) return false
+  const ratio = Math.max(avgW, avgH) / Math.min(avgW, avgH)
+  // Document aspect ratio must be between 1.15 and 1.85
+  if (ratio < 1.15 || ratio > 1.85) return false
+
+  // Strict convexity and interior angle checks (65 to 115 deg)
   let positive = 0, negative = 0
   for (let i = 0; i < 4; i++) {
     const p0 = points[(i + 3) % 4]
     const p1 = points[i]
     const p2 = points[(i + 1) % 4]
-    const dx1 = p1.x - p0.x, dy1 = p1.y - p0.y
-    const dx2 = p2.x - p1.x, dy2 = p2.y - p1.y
-    const cross = dx1 * dy2 - dy1 * dx2
+    const v1x = p0.x - p1.x, v1y = p0.y - p1.y
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y
+    const cross = v1x * v2y - v1y * v2x
     if (cross > 0) positive++
     if (cross < 0) negative++
 
-    // Angle check between edges p0->p1 and p1->p2
-    const dot = dx1 * dx2 + dy1 * dy2
-    const mag1 = Math.hypot(dx1, dy1)
-    const mag2 = Math.hypot(dx2, dy2)
+    const dot = v1x * v2x + v1y * v2y
+    const mag1 = Math.hypot(v1x, v1y)
+    const mag2 = Math.hypot(v2x, v2y)
     if (mag1 === 0 || mag2 === 0) return false
-    const cosTheta = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
-    const angleDeg = Math.acos(cosTheta) * (180 / Math.PI)
-    if (angleDeg < 40 || angleDeg > 140) return false
+    const cosA = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
+    const angleDeg = Math.acos(cosA) * (180 / Math.PI)
+    if (angleDeg < 65 || angleDeg > 115) return false
   }
-  if (positive !== 4 && negative !== 4) return false // Not strictly convex
-
-  const topWidth = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
-  const bottomWidth = Math.hypot(points[2].x - points[3].x, points[2].y - points[3].y)
-  const leftHeight = Math.hypot(points[3].x - points[0].x, points[3].y - points[0].y)
-  const rightHeight = Math.hypot(points[2].x - points[1].x, points[2].y - points[1].y)
-  const aspectRatio = (topWidth + bottomWidth) / (leftHeight + rightHeight)
-  if (aspectRatio < 0.2 || aspectRatio > 5) return false
+  if (positive !== 4 && negative !== 4) return false
   return true
 }
 
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
   const totalArea = canvas.width * canvas.height
+  const width = canvas.width
+  const height = canvas.height
   let src = null
   let gray = null
   let edged = null
@@ -145,7 +154,7 @@ function findOptimalCorners(canvas) {
     hierarchy = new cv.Mat()
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-    cv.Canny(gray, edged, 40, 140)
+    cv.Canny(gray, edged, 65, 185)
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
     cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
     kernel.delete()
@@ -157,13 +166,11 @@ function findOptimalCorners(canvas) {
       try {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
-        if (area > 0.08 * totalArea && area < 0.90 * totalArea) {
+        if (area >= 0.15 * totalArea && area <= 0.85 * totalArea) {
           const rect = cv.boundingRect(cnt)
-          const marginX = Math.max(2, canvas.width * 0.01)
-          const marginY = Math.max(2, canvas.height * 0.01)
-          if (rect.x <= marginX || rect.y <= marginY ||
-              rect.x + rect.width >= canvas.width - marginX ||
-              rect.y + rect.height >= canvas.height - marginY) {
+          if (rect.x <= 3 || rect.y <= 3 ||
+              rect.x + rect.width >= width - 3 ||
+              rect.y + rect.height >= height - 3) {
             continue
           }
           candidates.push({ area, cnt: cnt.clone() })
@@ -173,53 +180,37 @@ function findOptimalCorners(canvas) {
       }
     }
 
-    const candidate = candidates.sort((a, b) => b.area - a.area)[0]
-    if (!candidate) return null
-
-    let hull = null
-    try {
-      hull = new cv.Mat()
-      cv.convexHull(candidate.cnt, hull, false, true)
-      const peri = cv.arcLength(hull, true)
-      const hullArea = cv.contourArea(hull)
-      for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
-        let approx = null
-        try {
-          approx = new cv.Mat()
-          cv.approxPolyDP(hull, approx, epsRatio * peri, true)
-          if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
-            const points = []
-            for (let j = 0; j < 4; j++) {
-              points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+    candidates.sort((a, b) => b.area - a.area)
+    for (const candidate of candidates) {
+      let hull = null
+      try {
+        hull = new cv.Mat()
+        cv.convexHull(candidate.cnt, hull, false, true)
+        const peri = cv.arcLength(candidate.cnt, true)
+        const hullArea = cv.contourArea(hull)
+        for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+          let approx = null
+          try {
+            approx = new cv.Mat()
+            cv.approxPolyDP(candidate.cnt, approx, epsRatio * peri, true)
+            if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
+              const points = []
+              for (let j = 0; j < 4; j++) {
+                points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+              }
+              const ordered = orderPoints(points)
+              if (isValidQuad(ordered, totalArea)) return ordered
             }
-            const ordered = orderPoints(points)
-            if (isValidQuad(ordered, totalArea)) return ordered
+            if (approx.rows === 4) break
+          } finally {
+            approx?.delete()
           }
-        } finally {
-          approx?.delete()
         }
+      } finally {
+        hull?.delete()
       }
-
-      const n = hull.rows
-      let tl, tr, br, bl
-      let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
-      for (let j = 0; j < n; j++) {
-        const x = hull.data32S[j * 2]
-        const y = hull.data32S[j * 2 + 1]
-        const s = x + y, d = x - y
-        if (s < minSum) { minSum = s; tl = { x, y } }
-        if (s > maxSum) { maxSum = s; br = { x, y } }
-        if (d > maxDiff) { maxDiff = d; tr = { x, y } }
-        if (d < minDiff) { minDiff = d; bl = { x, y } }
-      }
-      if (tl && tr && br && bl) {
-        const extremes = orderPoints([tl, tr, br, bl])
-        if (isValidQuad(extremes, totalArea)) return extremes
-      }
-      return null
-    } finally {
-      hull?.delete()
     }
+    return null
   } finally {
     candidates.forEach(({ cnt }) => cnt.delete())
     kernel?.delete()
@@ -229,6 +220,31 @@ function findOptimalCorners(canvas) {
     gray?.delete()
     src?.delete()
   }
+}
+
+function alignCorners(target, current) {
+  // Try all 4 cyclic shifts to find permutation with minimal total Euclidean distance
+  const shifts = [
+    [0, 1, 2, 3],
+    [1, 2, 3, 0],
+    [2, 3, 0, 1],
+    [3, 0, 1, 2],
+  ]
+  let bestPerm = target
+  let minDist = Infinity
+  for (const shift of shifts) {
+    let dist = 0
+    for (let i = 0; i < 4; i++) {
+      const t = target[shift[i]]
+      const c = current[i]
+      dist += Math.hypot(t.x - c.x, t.y - c.y)
+    }
+    if (dist < minDist) {
+      minDist = dist
+      bestPerm = shift.map(idx => target[idx])
+    }
+  }
+  return bestPerm
 }
 
 function customExtract(srcCanvas, pts) {
@@ -270,8 +286,8 @@ export default function App() {
   const isDetecting = useRef(false)
   // Timestamp of the last detection kick-off (ms) — used for throttling
   const lastDetectTime = useRef(0)
-  const activeCornersRef = useRef(null)
   const smoothedCornersRef = useRef(null)
+  const lastKnownGoodCornersRef = useRef(null)
   const targetCornersRef = useRef(null)
   const lastValidDetectionTime = useRef(0)
   const [screen, setScreen] = useState('camera')
@@ -375,8 +391,8 @@ export default function App() {
   }, [])
 
   async function startCamera() {
-    activeCornersRef.current = null
     smoothedCornersRef.current = null
+    lastKnownGoodCornersRef.current = null
     targetCornersRef.current = null
     lastValidDetectionTime.current = 0
     isDetecting.current = false
@@ -453,27 +469,32 @@ export default function App() {
     const now2 = performance.now()
     const target = targetCornersRef.current
     const timeSinceValid = now2 - lastValidDetectionTime.current
-    const GRACE_PERIOD = 450 // ms
+    const GRACE_PERIOD = 400 // ms
+    const FADE_DURATION = 200 // ms
 
     if (target) {
       if (!smoothedCornersRef.current) {
+        // First detection: snap to target immediately
         smoothedCornersRef.current = target.map(p => ({ ...p }))
       } else {
-        // Lerp towards target: 0.32 factor at 60 FPS smoothly bridges 80ms worker ticks
-        const LERP = 0.32
+        // Align corners using cyclic Euclidean nearest-neighbor to prevent angular twisting
+        const aligned = alignCorners(target, smoothedCornersRef.current)
+        // LERP towards aligned target at factor 0.35
+        const LERP = 0.35
         smoothedCornersRef.current = smoothedCornersRef.current.map((curr, idx) => ({
-          x: curr.x + (target[idx].x - curr.x) * LERP,
-          y: curr.y + (target[idx].y - curr.y) * LERP,
+          x: curr.x + (aligned[idx].x - curr.x) * LERP,
+          y: curr.y + (aligned[idx].y - curr.y) * LERP,
         }))
       }
-    } else if (timeSinceValid > GRACE_PERIOD) {
+      lastKnownGoodCornersRef.current = smoothedCornersRef.current.map(p => ({ ...p }))
+    } else if (timeSinceValid > GRACE_PERIOD + FADE_DURATION) {
+      // Only clear after grace period; NEVER snap to full screen
       smoothedCornersRef.current = null
     }
 
-    // Keep activeCornersRef in sync so capture() uses smoothed coords
-    activeCornersRef.current = smoothedCornersRef.current
-
-    const alpha = target ? 1 : Math.max(0, 1 - (timeSinceValid / GRACE_PERIOD))
+    const alpha = target || timeSinceValid <= GRACE_PERIOD
+      ? 1
+      : Math.max(0, 1 - ((timeSinceValid - GRACE_PERIOD) / FADE_DURATION))
     const normalizedPts = smoothedCornersRef.current
     if (normalizedPts && alpha > 0) {
       const coverScale = Math.max(dispW / v.videoWidth, dispH / v.videoHeight)
@@ -536,23 +557,18 @@ export default function App() {
 
         const scaledPoints = findOptimalCorners(dc)
         if (scaledPoints && isValidQuad(scaledPoints, dw * dh)) {
-          // Scale from offscreen coords back to full video resolution
+          // Scale from detection canvas coords back to full video resolution
           points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
           detectionGood = true
-        } else if (smoothedCornersRef.current) {
-          // Fall back to the frozen smoothed corners from the live overlay
-          points = smoothedCornersRef.current.map(p => ({
-            x: p.x * c.width,
-            y: p.y * c.height,
-          }))
-          detectionGood = true
-        } else if (activeCornersRef.current) {
-          points = activeCornersRef.current.map(p => ({
+        } else if (lastKnownGoodCornersRef.current) {
+          // Use Last Known Good smoothed corners from live overlay (normalized → pixels)
+          points = lastKnownGoodCornersRef.current.map(p => ({
             x: p.x * c.width,
             y: p.y * c.height,
           }))
           detectionGood = true
         }
+        // Never fallback to fitPoints or full-screen corners
         if (points) out = customExtract(c, points)
       } catch {
         detectionGood = false
@@ -566,8 +582,15 @@ export default function App() {
         setScreen('confirm')
         setStatus('Xem lại và xác nhận trang')
       } else {
+        // No valid detection and no last-known-good corners: open manual adjust without fitPoints fallback
         const rawBlob = await blobFrom(c)
-        setDraft({ raw: urlOf(rawBlob), points: fitPoints(c.width, c.height) })
+        const centerPts = [
+          { x: c.width * 0.25, y: c.height * 0.25 },
+          { x: c.width * 0.75, y: c.height * 0.25 },
+          { x: c.width * 0.75, y: c.height * 0.75 },
+          { x: c.width * 0.25, y: c.height * 0.75 },
+        ]
+        setDraft({ raw: urlOf(rawBlob), points: centerPts })
         setFilter('color')
         setScreen('adjust')
         setStatus('Chỉnh lại 4 góc')
