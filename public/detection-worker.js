@@ -10,13 +10,47 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
-function isValidQuad(points) {
-  if (new Set(points.map(({ x, y }) => `${x},${y}`)).size !== 4) return false
-  const area = points.reduce((sum, point, index) => {
-    const next = points[(index + 1) % points.length]
-    return sum + point.x * next.y - next.x * point.y
-  }, 0)
-  return Math.abs(area) > 1
+function isValidQuad(points, totalArea) {
+  if (!points || points.length !== 4) return false
+  // Check distinct points
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 10) return false
+    }
+  }
+  // Area check via Shoelace formula
+  let signedArea = 0
+  for (let i = 0; i < 4; i++) {
+    const next = points[(i + 1) % 4]
+    signedArea += points[i].x * next.y - next.x * points[i].y
+  }
+  const area = Math.abs(signedArea) * 0.5
+  if (totalArea !== undefined && (area < 0.08 * totalArea || area > 0.90 * totalArea)) return false
+  if (totalArea === undefined && area < 1) return false
+
+  // Strict convexity and angle bounds
+  let positive = 0, negative = 0
+  for (let i = 0; i < 4; i++) {
+    const p0 = points[(i + 3) % 4]
+    const p1 = points[i]
+    const p2 = points[(i + 1) % 4]
+    const dx1 = p1.x - p0.x, dy1 = p1.y - p0.y
+    const dx2 = p2.x - p1.x, dy2 = p2.y - p1.y
+    const cross = dx1 * dy2 - dy1 * dx2
+    if (cross > 0) positive++
+    if (cross < 0) negative++
+
+    // Angle check between edges p0->p1 and p1->p2
+    const dot = dx1 * dx2 + dy1 * dy2
+    const mag1 = Math.hypot(dx1, dy1)
+    const mag2 = Math.hypot(dx2, dy2)
+    if (mag1 === 0 || mag2 === 0) return false
+    const cosTheta = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
+    const angleDeg = Math.acos(cosTheta) * (180 / Math.PI)
+    if (angleDeg < 40 || angleDeg > 140) return false
+  }
+  if (positive !== 4 && negative !== 4) return false // Not strictly convex
+  return true
 }
 
 function findOptimalCorners(imageData) {
@@ -49,7 +83,12 @@ function findOptimalCorners(imageData) {
       try {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
-        if (area > 0.06 * totalArea) {
+        if (area > 0.08 * totalArea && area < 0.90 * totalArea) {
+          // Reject contours whose bounding box spans the full frame (sensor border artifact)
+          const rect = cv.boundingRect(cnt)
+          if (rect.width >= imageData.width * 0.96 && rect.height >= imageData.height * 0.96) {
+            continue
+          }
           candidates.push({ area, cnt: cnt.clone() })
         }
       } finally {
@@ -97,7 +136,7 @@ function findOptimalCorners(imageData) {
       }
       if (tl && tr && br && bl) {
         const extremes = orderPoints([tl, tr, br, bl])
-        if (isValidQuad(extremes)) return extremes
+        if (isValidQuad(extremes, totalArea)) return extremes
       }
       return null
     } finally {
