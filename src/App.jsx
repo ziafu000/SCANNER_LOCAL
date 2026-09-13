@@ -139,7 +139,7 @@ function getMinAreaRectPoints(cv, cnt) {
   return orderPoints(pts)
 }
 
-function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea, maxArea) {
+function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) {
   let edged = null
   let contours = null
   let hierarchy = null
@@ -165,7 +165,7 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea, 
     for (let i = 0; i < numContours; ++i) {
       const cnt = contours.get(i)
       const area = cv.contourArea(cnt)
-      if (area > minArea && area < maxArea) {
+      if (area > minArea) {
         candidates.push({ area, cnt: cnt.clone() })
       }
       cnt.delete()
@@ -182,7 +182,7 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea, 
         cv.approxPolyDP(hull, approx, eps * peri, true)
         if (approx.rows === 4 && cv.isContourConvex(approx)) {
           const approxArea = Math.abs(cv.contourArea(approx))
-          if (approxArea >= minArea && approxArea <= maxArea) {
+          if (approxArea >= minArea) {
             const pts = []
             for (let j = 0; j < 4; j++) {
               pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
@@ -221,7 +221,6 @@ function findOptimalCorners(canvas) {
   const cv = window.cv
   const totalArea = canvas.width * canvas.height
   const minArea = totalArea * 0.05
-  const maxArea = totalArea * 0.85
 
   let src = null
   let gray = null
@@ -237,7 +236,7 @@ function findOptimalCorners(canvas) {
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
 
     // Pass 1: Standard Contrast (30, 90)
-    const pass1 = extractCandidateQuad(cv, gray, kernel, 30, 90, minArea, maxArea)
+    const pass1 = extractCandidateQuad(cv, gray, kernel, 30, 90, minArea)
     if (pass1.quad) {
       if (pass1.largestCnt) pass1.largestCnt.delete()
       return pass1.quad
@@ -246,7 +245,7 @@ function findOptimalCorners(canvas) {
     fallbackArea = pass1.largestArea
 
     // Pass 2: Sensitive Low-Contrast Fallback (12, 36)
-    const pass2 = extractCandidateQuad(cv, gray, kernel, 12, 36, minArea, maxArea)
+    const pass2 = extractCandidateQuad(cv, gray, kernel, 12, 36, minArea)
     if (pass2.quad) {
       if (pass2.largestCnt) pass2.largestCnt.delete()
       return pass2.quad
