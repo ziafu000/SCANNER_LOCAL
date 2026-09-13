@@ -76,110 +76,109 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
+function isValidQuad(points) {
+  if (new Set(points.map(({ x, y }) => `${x},${y}`)).size !== 4) return false
+  const area = points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length]
+    return sum + point.x * next.y - next.x * point.y
+  }, 0)
+  return Math.abs(area) > 1
+}
+
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
-  const src = cv.imread(canvas)
-  const gray = new cv.Mat()
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-  const edged = new cv.Mat()
-  cv.Canny(gray, edged, 75, 200)
+  const totalArea = canvas.width * canvas.height
+  let src = null
+  let gray = null
+  let edged = null
+  let contours = null
+  let hierarchy = null
+  let kernel = null
+  const candidates = []
 
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
-  cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
-  kernel.delete()
+  try {
+    src = cv.imread(canvas)
+    gray = new cv.Mat()
+    edged = new cv.Mat()
+    contours = new cv.MatVector()
+    hierarchy = new cv.Mat()
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+    cv.Canny(gray, edged, 40, 140)
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
+    cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
+    kernel.delete()
+    kernel = null
+    cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
-  cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-  let candidates = []
-  const minArea = canvas.width * canvas.height * 0.05
-
-  for (let i = 0; i < contours.size(); ++i) {
-    const cnt = contours.get(i)
-    const area = cv.contourArea(cnt)
-    if (area > minArea) {
-      candidates.push({ area, cnt: cnt.clone() })
-    }
-    cnt.delete()
-  }
-
-  candidates.sort((a, b) => b.area - a.area)
-
-  let points = null
-  let fallbackPoints = null
-
-  for (let i = 0; i < candidates.length; i++) {
-    const { cnt } = candidates[i]
-    const peri = cv.arcLength(cnt, true)
-    const approx = new cv.Mat()
-    cv.approxPolyDP(cnt, approx, 0.02 * peri, true)
-
-    if (approx.rows === 4) {
-      const pts = []
-      for (let j = 0; j < 4; j++) {
-        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+    for (let i = 0; i < contours.size(); ++i) {
+      let cnt = null
+      try {
+        cnt = contours.get(i)
+        const area = cv.contourArea(cnt)
+        if (area > 0.06 * totalArea) {
+          candidates.push({ area, cnt: cnt.clone() })
+        }
+      } finally {
+        cnt?.delete()
       }
-      points = orderPoints(pts)
-      approx.delete()
-      break
-    } else if (i === 0) {
-      const pts = []
-      const rect = cv.minAreaRect(cnt)
-      let usedBoxPoints = false
-      if (cv.boxPoints) {
+    }
+
+    const candidate = candidates.sort((a, b) => b.area - a.area)[0]
+    if (!candidate) return null
+
+    let hull = null
+    try {
+      hull = new cv.Mat()
+      cv.convexHull(candidate.cnt, hull, false, true)
+      const peri = cv.arcLength(hull, true)
+      const hullArea = cv.contourArea(hull)
+      for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+        let approx = null
         try {
-          const box = new cv.Mat()
-          cv.boxPoints(rect, box)
-          for (let j = 0; j < 4; j++) {
-            pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
+          approx = new cv.Mat()
+          cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+          if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
+            const points = []
+            for (let j = 0; j < 4; j++) {
+              points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+            }
+            return orderPoints(points)
           }
-          box.delete()
-          usedBoxPoints = true
-        } catch (e) {
-          console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+        } finally {
+          approx?.delete()
         }
       }
-      
-      if (!usedBoxPoints) {
-        const cx = rect.center.x, cy = rect.center.y
-        const w = rect.size.width / 2, h = rect.size.height / 2
-        const angle = (rect.angle * Math.PI) / 180.0
-        const cosA = Math.cos(angle), sinA = Math.sin(angle)
-        const offsets = [
-          { x: -w, y: -h },
-          { x: w, y: -h },
-          { x: w, y: h },
-          { x: -w, y: h }
-        ]
-        for (const p of offsets) {
-          pts.push({
-            x: cx + p.x * cosA - p.y * sinA,
-            y: cy + p.x * sinA + p.y * cosA
-          })
-        }
+
+      const n = hull.rows
+      let tl, tr, br, bl
+      let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
+      for (let j = 0; j < n; j++) {
+        const x = hull.data32S[j * 2]
+        const y = hull.data32S[j * 2 + 1]
+        const s = x + y, d = x - y
+        if (s < minSum) { minSum = s; tl = { x, y } }
+        if (s > maxSum) { maxSum = s; br = { x, y } }
+        if (d > maxDiff) { maxDiff = d; tr = { x, y } }
+        if (d < minDiff) { minDiff = d; bl = { x, y } }
       }
-      fallbackPoints = orderPoints(pts)
+      if (tl && tr && br && bl) {
+        const extremes = orderPoints([tl, tr, br, bl])
+        if (isValidQuad(extremes)) return extremes
+      }
+      return null
+    } finally {
+      hull?.delete()
     }
-    approx.delete()
+  } finally {
+    candidates.forEach(({ cnt }) => cnt.delete())
+    kernel?.delete()
+    hierarchy?.delete()
+    contours?.delete()
+    edged?.delete()
+    gray?.delete()
+    src?.delete()
   }
-
-  if (!points && fallbackPoints) {
-    points = fallbackPoints
-  }
-
-  for (const c of candidates) {
-    c.cnt.delete()
-  }
-
-  contours.delete()
-  hierarchy.delete()
-  edged.delete()
-  gray.delete()
-  src.delete()
-
-  return points
 }
 
 function customExtract(srcCanvas, pts) {
@@ -346,14 +345,18 @@ export default function App() {
 
   function drawLive() {
     const v = video.current, o = live.current
-    if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
+    if (!v || !o || v.readyState < 2 || !v.videoWidth || !v.videoHeight) { frame.current = requestAnimationFrame(drawLive); return }
 
-    // Size the overlay canvas 1:1 to the container (not the video element) to avoid
-    // iOS Safari flex-height misreporting on the video element itself.
+    // Size the overlay canvas 1:1 to the container using getBoundingClientRect for
+    // reliable dimensions on iOS Safari (clientWidth/Height can misreport during flex layout).
     const container = v.parentElement
-    const dispW = container ? container.clientWidth : (v.clientWidth || 700)
-    const dispH = container ? container.clientHeight : (v.clientHeight || 700)
-    if (o.width !== dispW || o.height !== dispH) { o.width = dispW; o.height = dispH }
+    const rect = container ? container.getBoundingClientRect() : null
+    const dispW = rect ? Math.round(rect.width) : (v.clientWidth || 700)
+    const dispH = rect ? Math.round(rect.height) : (v.clientHeight || 700)
+    if (dispW > 0 && dispH > 0 && (o.width !== dispW || o.height !== dispH)) {
+      o.width = dispW
+      o.height = dispH
+    }
 
     const c = o.getContext('2d')
     // Clear overlay — the <video> element renders the live feed natively at 60 FPS
@@ -975,7 +978,7 @@ export default function App() {
 
   /* ───────── Camera Screen (default) ───────── */
   return (
-    <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
+    <main className="safe flex h-[100dvh] max-h-[100dvh] flex-col bg-slate-950 justify-between overflow-hidden">
       <header className="px-4 pt-1 pb-2">
         <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
           <div className="flex items-center gap-2.5">
@@ -1014,8 +1017,19 @@ export default function App() {
       </header>
 
       <div className="relative mx-4 my-1 flex-1 min-h-0 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
-        <video ref={video} playsInline muted className="absolute inset-0 h-full w-full object-cover" />
-        <canvas ref={live} className="absolute inset-0 h-full w-full pointer-events-none" />
+        <video
+          ref={video}
+          playsInline
+          muted
+          autoPlay
+          className="absolute inset-0 h-full w-full object-cover"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+        <canvas
+          ref={live}
+          className="absolute inset-0 h-full w-full pointer-events-none"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+        />
 
         <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
           <div className="flex justify-between">
