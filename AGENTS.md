@@ -18,7 +18,7 @@
 
 ## Camera Preview Performance Model
 - **Video rendering:** The `<video>` element renders the live feed at native hardware frame rate (up to 60 FPS requested via `frameRate: { ideal: 60, min: 30 }` in `getUserMedia`). Do NOT draw video frames to the overlay canvas.
-- **Overlay canvas:** Transparent overlay (`clearRect` each frame); only the detected document boundary (green polygon + corner dots) is drawn per rAF tick using the most recent corners from the Worker.
+- **Overlay canvas:** Transparent overlay whose backing size matches the viewfinder container 1:1; each rAF tick clears it and maps the Worker's latest normalized corners through the video's `object-cover` scale and crop before drawing the green polygon and corner dots.
 - **Detection Worker (`src/detectionWorker.js`):** OpenCV contour detection runs in a dedicated Web Worker. The main thread posts a downscaled (~360px) ImageBitmap to it; the Worker replies with the four corner points. Throttled to ~12 fps (every 80ms) via `isDetecting` lock + `lastDetectTime` timestamp.
 - **Capture:** Full-resolution canvas captured from `video`; detection runs at 700px scale (not 360px) for accuracy since the camera is already stopped.
 
