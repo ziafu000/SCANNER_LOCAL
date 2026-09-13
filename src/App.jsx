@@ -141,7 +141,7 @@ function findOptimalCorners(canvas) {
           console.warn('cv.boxPoints failed, falling back to manual calculation', e)
         }
       }
-      
+
       if (!usedBoxPoints) {
         const cx = rect.center.x, cy = rect.center.y
         const w = rect.size.width / 2, h = rect.size.height / 2
