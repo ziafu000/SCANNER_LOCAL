@@ -12,56 +12,65 @@ function orderPoints(pts) {
 
 function isValidQuad(points, totalArea) {
   if (!points || points.length !== 4) return false
-  // Check distinct points
+
+  // Distinct corners check
   for (let i = 0; i < 4; i++) {
     for (let j = i + 1; j < 4; j++) {
-      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 10) return false
+      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 15) return false
     }
   }
-  // Area check via Shoelace formula
+
+  // Shoelace area check: must be 15% to 85% of totalArea
   let signedArea = 0
   for (let i = 0; i < 4; i++) {
     const next = points[(i + 1) % 4]
     signedArea += points[i].x * next.y - next.x * points[i].y
   }
   const area = Math.abs(signedArea) * 0.5
-  if (totalArea !== undefined && (area < 0.08 * totalArea || area > 0.90 * totalArea)) return false
-  if (totalArea === undefined && area < 1) return false
+  if (area < 0.15 * totalArea || area > 0.85 * totalArea) return false
 
-  // Strict convexity and angle bounds
+  // Edge lengths and Aspect Ratio check
+  const edgeLens = []
+  for (let i = 0; i < 4; i++) {
+    const next = points[(i + 1) % 4]
+    edgeLens.push(Math.hypot(next.x - points[i].x, next.y - points[i].y))
+  }
+  const top = edgeLens[0], right = edgeLens[1], bottom = edgeLens[2], left = edgeLens[3]
+  const avgW = (top + bottom) / 2
+  const avgH = (left + right) / 2
+  if (avgW <= 0 || avgH <= 0) return false
+  const ratio = Math.max(avgW, avgH) / Math.min(avgW, avgH)
+  // Document aspect ratio must be between 1.12 and 1.88
+  if (ratio < 1.12 || ratio > 1.88) return false
+
+  // Strict convexity and interior angle checks (65 to 115 deg)
   let positive = 0, negative = 0
   for (let i = 0; i < 4; i++) {
     const p0 = points[(i + 3) % 4]
     const p1 = points[i]
     const p2 = points[(i + 1) % 4]
-    const dx1 = p1.x - p0.x, dy1 = p1.y - p0.y
-    const dx2 = p2.x - p1.x, dy2 = p2.y - p1.y
-    const cross = dx1 * dy2 - dy1 * dx2
+    const v1x = p0.x - p1.x, v1y = p0.y - p1.y
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y
+    const cross = v1x * v2y - v1y * v2x
     if (cross > 0) positive++
     if (cross < 0) negative++
 
-    // Angle check between edges p0->p1 and p1->p2
-    const dot = dx1 * dx2 + dy1 * dy2
-    const mag1 = Math.hypot(dx1, dy1)
-    const mag2 = Math.hypot(dx2, dy2)
+    const dot = v1x * v2x + v1y * v2y
+    const mag1 = Math.hypot(v1x, v1y)
+    const mag2 = Math.hypot(v2x, v2y)
     if (mag1 === 0 || mag2 === 0) return false
-    const cosTheta = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
-    const angleDeg = Math.acos(cosTheta) * (180 / Math.PI)
-    if (angleDeg < 40 || angleDeg > 140) return false
+    const cosA = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
+    const angleDeg = Math.acos(cosA) * (180 / Math.PI)
+    if (angleDeg < 65 || angleDeg > 115) return false
   }
-  if (positive !== 4 && negative !== 4) return false // Not strictly convex
-
-  const topWidth = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
-  const bottomWidth = Math.hypot(points[2].x - points[3].x, points[2].y - points[3].y)
-  const leftHeight = Math.hypot(points[3].x - points[0].x, points[3].y - points[0].y)
-  const rightHeight = Math.hypot(points[2].x - points[1].x, points[2].y - points[1].y)
-  const aspectRatio = (topWidth + bottomWidth) / (leftHeight + rightHeight)
-  if (aspectRatio < 0.2 || aspectRatio > 5) return false
+  if (positive !== 4 && negative !== 4) return false
   return true
 }
 
 function findOptimalCorners(imageData) {
   const totalArea = imageData.width * imageData.height
+  const width = imageData.width
+  const height = imageData.height
   let src = null
   let gray = null
   let edged = null
@@ -78,7 +87,7 @@ function findOptimalCorners(imageData) {
     hierarchy = new cv.Mat()
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-    cv.Canny(gray, edged, 40, 140)
+    cv.Canny(gray, edged, 65, 185)
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
     cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
     kernel.delete()
@@ -90,13 +99,11 @@ function findOptimalCorners(imageData) {
       try {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
-        if (area > 0.08 * totalArea && area < 0.90 * totalArea) {
+        if (area >= 0.15 * totalArea && area <= 0.85 * totalArea) {
           const rect = cv.boundingRect(cnt)
-          const marginX = Math.max(2, imageData.width * 0.01)
-          const marginY = Math.max(2, imageData.height * 0.01)
-          if (rect.x <= marginX || rect.y <= marginY ||
-              rect.x + rect.width >= imageData.width - marginX ||
-              rect.y + rect.height >= imageData.height - marginY) {
+          if (rect.x <= 3 || rect.y <= 3 ||
+              rect.x + rect.width >= width - 3 ||
+              rect.y + rect.height >= height - 3) {
             continue
           }
           candidates.push({ area, cnt: cnt.clone() })
