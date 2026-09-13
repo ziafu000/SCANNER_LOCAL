@@ -182,6 +182,7 @@ function findOptimalCorners(canvas) {
 
     candidates.sort((a, b) => b.area - a.area)
     for (const candidate of candidates) {
+      if (!cv.isContourConvex(candidate.cnt)) continue
       let hull = null
       try {
         hull = new cv.Mat()
@@ -486,6 +487,7 @@ export default function App() {
     const target = targetCornersRef.current
     const timeSinceValid = now2 - lastValidDetectionTime.current
     const GRACE_PERIOD = 400 // ms
+    const FADE_DURATION = 200 // ms
 
     if (target) {
       if (!smoothedCornersRef.current) {
@@ -501,7 +503,7 @@ export default function App() {
           y: curr.y + (aligned[idx].y - curr.y) * LERP,
         }))
       }
-    } else if (timeSinceValid > GRACE_PERIOD) {
+    } else if (timeSinceValid > GRACE_PERIOD + FADE_DURATION) {
       // Only clear after grace period; NEVER snap to full screen
       smoothedCornersRef.current = null
     }
@@ -509,7 +511,9 @@ export default function App() {
     // Keep activeCornersRef in sync so capture() uses smoothed coords
     activeCornersRef.current = smoothedCornersRef.current
 
-    const alpha = target ? 1 : Math.max(0, 1 - (timeSinceValid / GRACE_PERIOD))
+    const alpha = target || timeSinceValid <= GRACE_PERIOD
+      ? 1
+      : Math.max(0, 1 - ((timeSinceValid - GRACE_PERIOD) / FADE_DURATION))
     const normalizedPts = smoothedCornersRef.current
     if (normalizedPts && alpha > 0) {
       const coverScale = Math.max(dispW / v.videoWidth, dispH / v.videoHeight)

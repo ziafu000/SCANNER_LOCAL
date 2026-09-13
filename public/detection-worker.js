@@ -115,6 +115,7 @@ function findOptimalCorners(imageData) {
 
     candidates.sort((a, b) => b.area - a.area)
     for (const candidate of candidates) {
+      if (!cv.isContourConvex(candidate.cnt)) continue
       let hull = null
       try {
         hull = new cv.Mat()
