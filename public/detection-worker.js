@@ -10,6 +10,15 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
+function isValidQuad(points) {
+  if (new Set(points.map(({ x, y }) => `${x},${y}`)).size !== 4) return false
+  const area = points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length]
+    return sum + point.x * next.y - next.x * point.y
+  }, 0)
+  return Math.abs(area) > 1
+}
+
 function findOptimalCorners(imageData) {
   const totalArea = imageData.width * imageData.height
   const src = cv.matFromImageData(imageData)
@@ -93,7 +102,8 @@ function findOptimalCorners(imageData) {
         if (d < minDiff) { minDiff = d; bl = { x, y } }
       }
       if (tl && tr && br && bl) {
-        points = orderPoints([tl, tr, br, bl])
+        const extremes = orderPoints([tl, tr, br, bl])
+        if (isValidQuad(extremes)) points = extremes
       }
     }
 
