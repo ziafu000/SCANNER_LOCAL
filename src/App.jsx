@@ -76,175 +76,110 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
-function isValidQuad(points, totalArea) {
-  if (!points || points.length !== 4) return false
-
-  // Distinct corners check
-  for (let i = 0; i < 4; i++) {
-    for (let j = i + 1; j < 4; j++) {
-      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 15) return false
-    }
-  }
-
-  // Shoelace area check: must be 15% to 85% of totalArea
-  let signedArea = 0
-  for (let i = 0; i < 4; i++) {
-    const next = points[(i + 1) % 4]
-    signedArea += points[i].x * next.y - next.x * points[i].y
-  }
-  const area = Math.abs(signedArea) * 0.5
-  if (area < 0.15 * totalArea || area > 0.85 * totalArea) return false
-
-  // Edge lengths and Aspect Ratio check
-  const edgeLens = []
-  for (let i = 0; i < 4; i++) {
-    const next = points[(i + 1) % 4]
-    edgeLens.push(Math.hypot(next.x - points[i].x, next.y - points[i].y))
-  }
-  const top = edgeLens[0], right = edgeLens[1], bottom = edgeLens[2], left = edgeLens[3]
-  const avgW = (top + bottom) / 2
-  const avgH = (left + right) / 2
-  if (avgW <= 0 || avgH <= 0) return false
-  const ratio = Math.max(avgW, avgH) / Math.min(avgW, avgH)
-  // Document aspect ratio must be between 1.15 and 1.85
-  if (ratio < 1.15 || ratio > 1.85) return false
-
-  // Strict convexity and interior angle checks (65 to 115 deg)
-  let positive = 0, negative = 0
-  for (let i = 0; i < 4; i++) {
-    const p0 = points[(i + 3) % 4]
-    const p1 = points[i]
-    const p2 = points[(i + 1) % 4]
-    const v1x = p0.x - p1.x, v1y = p0.y - p1.y
-    const v2x = p2.x - p1.x, v2y = p2.y - p1.y
-    const cross = v1x * v2y - v1y * v2x
-    if (cross > 0) positive++
-    if (cross < 0) negative++
-
-    const dot = v1x * v2x + v1y * v2y
-    const mag1 = Math.hypot(v1x, v1y)
-    const mag2 = Math.hypot(v2x, v2y)
-    if (mag1 === 0 || mag2 === 0) return false
-    const cosA = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
-    const angleDeg = Math.acos(cosA) * (180 / Math.PI)
-    if (angleDeg < 65 || angleDeg > 115) return false
-  }
-  if (positive !== 4 && negative !== 4) return false
-  return true
-}
-
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
-  const totalArea = canvas.width * canvas.height
-  const width = canvas.width
-  const height = canvas.height
-  let src = null
-  let gray = null
-  let edged = null
-  let contours = null
-  let hierarchy = null
-  let kernel = null
-  const candidates = []
+  const src = cv.imread(canvas)
+  const gray = new cv.Mat()
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+  const edged = new cv.Mat()
+  cv.Canny(gray, edged, 75, 200)
 
-  try {
-    src = cv.imread(canvas)
-    gray = new cv.Mat()
-    edged = new cv.Mat()
-    contours = new cv.MatVector()
-    hierarchy = new cv.Mat()
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-    cv.Canny(gray, edged, 65, 185)
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
-    cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
-    kernel.delete()
-    kernel = null
-    cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
+  cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
+  kernel.delete()
 
-    for (let i = 0; i < contours.size(); ++i) {
-      let cnt = null
-      try {
-        cnt = contours.get(i)
-        const area = cv.contourArea(cnt)
-        if (area >= 0.15 * totalArea && area <= 0.85 * totalArea) {
-          const rect = cv.boundingRect(cnt)
-          if (rect.x <= 3 || rect.y <= 3 ||
-              rect.x + rect.width >= width - 3 ||
-              rect.y + rect.height >= height - 3) {
-            continue
-          }
-          candidates.push({ area, cnt: cnt.clone() })
-        }
-      } finally {
-        cnt?.delete()
-      }
+  const contours = new cv.MatVector()
+  const hierarchy = new cv.Mat()
+  cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+  let candidates = []
+  const minArea = canvas.width * canvas.height * 0.05
+
+  for (let i = 0; i < contours.size(); ++i) {
+    const cnt = contours.get(i)
+    const area = cv.contourArea(cnt)
+    if (area > minArea) {
+      candidates.push({ area, cnt: cnt.clone() })
     }
-
-    candidates.sort((a, b) => b.area - a.area)
-    for (const candidate of candidates) {
-      let hull = null
-      try {
-        hull = new cv.Mat()
-        cv.convexHull(candidate.cnt, hull, false, true)
-        const peri = cv.arcLength(candidate.cnt, true)
-        const hullArea = cv.contourArea(hull)
-        for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
-          let approx = null
-          try {
-            approx = new cv.Mat()
-            cv.approxPolyDP(candidate.cnt, approx, epsRatio * peri, true)
-            if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
-              const points = []
-              for (let j = 0; j < 4; j++) {
-                points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
-              }
-              const ordered = orderPoints(points)
-              if (isValidQuad(ordered, totalArea)) return ordered
-            }
-            if (approx.rows === 4) break
-          } finally {
-            approx?.delete()
-          }
-        }
-      } finally {
-        hull?.delete()
-      }
-    }
-    return null
-  } finally {
-    candidates.forEach(({ cnt }) => cnt.delete())
-    kernel?.delete()
-    hierarchy?.delete()
-    contours?.delete()
-    edged?.delete()
-    gray?.delete()
-    src?.delete()
+    cnt.delete()
   }
-}
 
-function alignCorners(target, current) {
-  // Try all 4 cyclic shifts to find permutation with minimal total Euclidean distance
-  const shifts = [
-    [0, 1, 2, 3],
-    [1, 2, 3, 0],
-    [2, 3, 0, 1],
-    [3, 0, 1, 2],
-  ]
-  let bestPerm = target
-  let minDist = Infinity
-  for (const shift of shifts) {
-    let dist = 0
-    for (let i = 0; i < 4; i++) {
-      const t = target[shift[i]]
-      const c = current[i]
-      dist += Math.hypot(t.x - c.x, t.y - c.y)
+  candidates.sort((a, b) => b.area - a.area)
+
+  let points = null
+  let fallbackPoints = null
+
+  for (let i = 0; i < candidates.length; i++) {
+    const { cnt } = candidates[i]
+    const peri = cv.arcLength(cnt, true)
+    const approx = new cv.Mat()
+    cv.approxPolyDP(cnt, approx, 0.02 * peri, true)
+
+    if (approx.rows === 4) {
+      const pts = []
+      for (let j = 0; j < 4; j++) {
+        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+      }
+      points = orderPoints(pts)
+      approx.delete()
+      break
+    } else if (i === 0) {
+      const pts = []
+      const rect = cv.minAreaRect(cnt)
+      let usedBoxPoints = false
+      if (cv.boxPoints) {
+        try {
+          const box = new cv.Mat()
+          cv.boxPoints(rect, box)
+          for (let j = 0; j < 4; j++) {
+            pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
+          }
+          box.delete()
+          usedBoxPoints = true
+        } catch (e) {
+          console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+        }
+      }
+      
+      if (!usedBoxPoints) {
+        const cx = rect.center.x, cy = rect.center.y
+        const w = rect.size.width / 2, h = rect.size.height / 2
+        const angle = (rect.angle * Math.PI) / 180.0
+        const cosA = Math.cos(angle), sinA = Math.sin(angle)
+        const offsets = [
+          { x: -w, y: -h },
+          { x: w, y: -h },
+          { x: w, y: h },
+          { x: -w, y: h }
+        ]
+        for (const p of offsets) {
+          pts.push({
+            x: cx + p.x * cosA - p.y * sinA,
+            y: cy + p.x * sinA + p.y * cosA
+          })
+        }
+      }
+      fallbackPoints = orderPoints(pts)
     }
-    if (dist < minDist) {
-      minDist = dist
-      bestPerm = shift.map(idx => target[idx])
-    }
+    approx.delete()
   }
-  return bestPerm
+
+  if (!points && fallbackPoints) {
+    points = fallbackPoints
+  }
+
+  for (const c of candidates) {
+    c.cnt.delete()
+  }
+
+  contours.delete()
+  hierarchy.delete()
+  edged.delete()
+  gray.delete()
+  src.delete()
+
+  return points
 }
 
 function customExtract(srcCanvas, pts) {
@@ -278,18 +213,7 @@ function customExtract(srcCanvas, pts) {
 
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
-  // Offscreen canvas for downscaled OpenCV detection (~360px wide)
-  const offscreen = useRef(null)
-  const detectionWorker = useRef(null)
-  const detectionRequest = useRef(0)
-  // Flag: true while an async detection pass is running (prevents re-entrancy)
-  const isDetecting = useRef(false)
-  // Timestamp of the last detection kick-off (ms) — used for throttling
-  const lastDetectTime = useRef(0)
-  const smoothedCornersRef = useRef(null)
-  const lastKnownGoodCornersRef = useRef(null)
-  const targetCornersRef = useRef(null)
-  const lastValidDetectionTime = useRef(0)
+  const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (preview coords)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -328,28 +252,6 @@ export default function App() {
   useEffect(() => {
     pagesRef.current = pages
   }, [pages])
-
-  useEffect(() => {
-    const worker = new Worker(`${import.meta.env.BASE_URL}detection-worker.js`)
-    detectionWorker.current = worker
-    worker.onmessage = ({ data }) => {
-      if (data.id !== detectionRequest.current) return
-      if (data.points) {
-        targetCornersRef.current = data.points.map(p => ({
-          x: p.x / data.width,
-          y: p.y / data.height,
-        }))
-        lastValidDetectionTime.current = performance.now()
-      } else {
-        targetCornersRef.current = null
-      }
-      isDetecting.current = false
-    }
-    worker.onerror = () => {
-      isDetecting.current = false
-    }
-    return () => worker.terminate()
-  }, [])
 
   useEffect(() => () => {
     pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
@@ -391,22 +293,11 @@ export default function App() {
   }, [])
 
   async function startCamera() {
-    smoothedCornersRef.current = null
-    lastKnownGoodCornersRef.current = null
-    targetCornersRef.current = null
-    lastValidDetectionTime.current = 0
-    isDetecting.current = false
-    detectionRequest.current++
-    lastDetectTime.current = 0
+    activeCornersRef.current = null
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1440 },
-          frameRate: { ideal: 60, min: 30 },
-        },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
         audio: false
       })
       stream.current = s
@@ -422,112 +313,44 @@ export default function App() {
 
   function drawLive() {
     const v = video.current, o = live.current
-    if (!v || !o || v.readyState < 2 || !v.videoWidth || !v.videoHeight) { frame.current = requestAnimationFrame(drawLive); return }
-
-    // Size the overlay canvas 1:1 to the container using getBoundingClientRect for
-    // reliable dimensions on iOS Safari (clientWidth/Height can misreport during flex layout).
-    const container = v.parentElement
-    const rect = container ? container.getBoundingClientRect() : null
-    const dispW = rect ? Math.round(rect.width) : (v.clientWidth || 700)
-    const dispH = rect ? Math.round(rect.height) : (v.clientHeight || 700)
-    if (dispW > 0 && dispH > 0 && (o.width !== dispW || o.height !== dispH)) {
-      o.width = dispW
-      o.height = dispH
-    }
-
+    if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
+    const max = 700, scale = Math.min(1, max / v.videoWidth)
+    const w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale)
+    if (o.width !== w) { o.width = w; o.height = h }
     const c = o.getContext('2d')
-    // Clear overlay — the <video> element renders the live feed natively at 60 FPS
-    c.clearRect(0, 0, o.width, o.height)
-
-    // Throttled detection: kick off an async detection pass at most every 80ms (~12 fps)
-    const now = performance.now()
-    if (!isDetecting.current && now - lastDetectTime.current > 80) {
-      lastDetectTime.current = now
-      isDetecting.current = true
-
-      // Prepare / size the offscreen detection canvas (~360px wide)
-      const DETECT_MAX = 360
-      const detScale = Math.min(1, DETECT_MAX / v.videoWidth)
-      const dw = Math.round(v.videoWidth * detScale)
-      const dh = Math.round(v.videoHeight * detScale)
-      if (!offscreen.current) offscreen.current = document.createElement('canvas')
-      const oc = offscreen.current
-      if (oc.width !== dw || oc.height !== dh) { oc.width = dw; oc.height = dh }
-      const context = oc.getContext('2d')
-      context.drawImage(v, 0, 0, dw, dh)
-      const id = ++detectionRequest.current
-      const imageData = context.getImageData(0, 0, dw, dh)
-      detectionWorker.current?.postMessage({
-        id,
-        width: dw,
-        height: dh,
-        imageData,
-      }, [imageData.data.buffer])
-    }
-
-    // Draw the overlay (document boundary) using smoothed corners with grace period
-    const now2 = performance.now()
-    const target = targetCornersRef.current
-    const timeSinceValid = now2 - lastValidDetectionTime.current
-    const GRACE_PERIOD = 400 // ms
-    const FADE_DURATION = 200 // ms
-
-    if (target) {
-      if (!smoothedCornersRef.current) {
-        // First detection: snap to target immediately
-        smoothedCornersRef.current = target.map(p => ({ ...p }))
-      } else {
-        // Align corners using cyclic Euclidean nearest-neighbor to prevent angular twisting
-        const aligned = alignCorners(target, smoothedCornersRef.current)
-        // LERP towards aligned target at factor 0.35
-        const LERP = 0.35
-        smoothedCornersRef.current = smoothedCornersRef.current.map((curr, idx) => ({
-          x: curr.x + (aligned[idx].x - curr.x) * LERP,
-          y: curr.y + (aligned[idx].y - curr.y) * LERP,
-        }))
-      }
-      lastKnownGoodCornersRef.current = smoothedCornersRef.current.map(p => ({ ...p }))
-    } else if (timeSinceValid > GRACE_PERIOD + FADE_DURATION) {
-      // Only clear after grace period; NEVER snap to full screen
-      smoothedCornersRef.current = null
-    }
-
-    const alpha = target || timeSinceValid <= GRACE_PERIOD
-      ? 1
-      : Math.max(0, 1 - ((timeSinceValid - GRACE_PERIOD) / FADE_DURATION))
-    const normalizedPts = smoothedCornersRef.current
-    if (normalizedPts && alpha > 0) {
-      const coverScale = Math.max(dispW / v.videoWidth, dispH / v.videoHeight)
-      const offsetX = (dispW - v.videoWidth * coverScale) / 2
-      const offsetY = (dispH - v.videoHeight * coverScale) / 2
-      const pts = normalizedPts.map(p => ({
-        x: offsetX + p.x * v.videoWidth * coverScale,
-        y: offsetY + p.y * v.videoHeight * coverScale,
-      }))
-      c.strokeStyle = `rgba(16, 185, 129, ${alpha})`
-      c.lineWidth = 4
-      c.beginPath()
-      c.moveTo(pts[0].x, pts[0].y)
-      c.lineTo(pts[1].x, pts[1].y)
-      c.lineTo(pts[2].x, pts[2].y)
-      c.lineTo(pts[3].x, pts[3].y)
-      c.closePath()
-      c.stroke()
-
-      c.fillStyle = `rgba(16, 185, 129, ${0.12 * alpha})`
-      c.fill()
-
-      for (const pt of pts) {
-        c.fillStyle = `rgba(255, 255, 255, ${alpha})`
+    c.drawImage(v, 0, 0, w, h)
+    try {
+      const pts = findOptimalCorners(o)
+      if (pts) {
+        activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
+        c.strokeStyle = '#10b981'
+        c.lineWidth = 4
         c.beginPath()
-        c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
-        c.fill()
-        c.strokeStyle = `rgba(16, 185, 129, ${alpha})`
-        c.lineWidth = 2
+        c.moveTo(pts[0].x, pts[0].y)
+        c.lineTo(pts[1].x, pts[1].y)
+        c.lineTo(pts[2].x, pts[2].y)
+        c.lineTo(pts[3].x, pts[3].y)
+        c.closePath()
         c.stroke()
-      }
-    }
 
+        c.fillStyle = 'rgba(16, 185, 129, 0.12)'
+        c.fill()
+
+        for (const pt of pts) {
+          c.fillStyle = '#ffffff'
+          c.beginPath()
+          c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
+          c.fill()
+          c.strokeStyle = '#10b981'
+          c.lineWidth = 2
+          c.stroke()
+        }
+      } else {
+        activeCornersRef.current = null
+      }
+    } catch {
+      activeCornersRef.current = null
+    }
     frame.current = requestAnimationFrame(drawLive)
   }
 
@@ -547,28 +370,23 @@ export default function App() {
       let detectionGood = false
 
       try {
-        const DETECT_MAX = 700
-        const detScale = Math.min(1, DETECT_MAX / c.width)
-        const dw = Math.round(c.width * detScale)
-        const dh = Math.round(c.height * detScale)
+        const max = 700, scale = Math.min(1, max / c.width)
+        const dw = Math.round(c.width * scale), dh = Math.round(c.height * scale)
         const dc = document.createElement('canvas')
         dc.width = dw; dc.height = dh
         dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
 
         const scaledPoints = findOptimalCorners(dc)
-        if (scaledPoints && isValidQuad(scaledPoints, dw * dh)) {
-          // Scale from detection canvas coords back to full video resolution
-          points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
+        if (scaledPoints) {
+          points = scaledPoints.map(p => ({ x: p.x / scale, y: p.y / scale }))
           detectionGood = true
-        } else if (lastKnownGoodCornersRef.current) {
-          // Use Last Known Good smoothed corners from live overlay (normalized → pixels)
-          points = lastKnownGoodCornersRef.current.map(p => ({
-            x: p.x * c.width,
-            y: p.y * c.height,
-          }))
+        } else if (activeCornersRef.current?.pts) {
+          const { pts: livePts, previewWidth, previewHeight } = activeCornersRef.current
+          const scaleX = c.width / previewWidth
+          const scaleY = c.height / previewHeight
+          points = livePts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }))
           detectionGood = true
         }
-        // Never fallback to fitPoints or full-screen corners
         if (points) out = customExtract(c, points)
       } catch {
         detectionGood = false
@@ -582,15 +400,8 @@ export default function App() {
         setScreen('confirm')
         setStatus('Xem lại và xác nhận trang')
       } else {
-        // No valid detection and no last-known-good corners: open manual adjust without fitPoints fallback
         const rawBlob = await blobFrom(c)
-        const centerPts = [
-          { x: c.width * 0.25, y: c.height * 0.25 },
-          { x: c.width * 0.75, y: c.height * 0.25 },
-          { x: c.width * 0.75, y: c.height * 0.75 },
-          { x: c.width * 0.25, y: c.height * 0.75 },
-        ]
-        setDraft({ raw: urlOf(rawBlob), points: centerPts })
+        setDraft({ raw: urlOf(rawBlob), points: fitPoints(c.width, c.height) })
         setFilter('color')
         setScreen('adjust')
         setStatus('Chỉnh lại 4 góc')
@@ -1093,7 +904,7 @@ export default function App() {
 
   /* ───────── Camera Screen (default) ───────── */
   return (
-    <main className="safe flex h-[100dvh] max-h-[100dvh] flex-col bg-slate-950 justify-between overflow-hidden">
+    <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
       <header className="px-4 pt-1 pb-2">
         <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
           <div className="flex items-center gap-2.5">
@@ -1131,20 +942,9 @@ export default function App() {
         </div>
       </header>
 
-      <div className="relative mx-4 my-1 flex-1 min-h-0 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
-        <video
-          ref={video}
-          playsInline
-          muted
-          autoPlay
-          className="absolute inset-0 h-full w-full object-cover"
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-        />
-        <canvas
-          ref={live}
-          className="absolute inset-0 h-full w-full pointer-events-none"
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
-        />
+      <div className="relative mx-4 my-1 flex-1 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
+        <video ref={video} playsInline muted className="h-full w-full object-cover" />
+        <canvas ref={live} className="absolute inset-0 h-full w-full object-fill" />
 
         <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
           <div className="flex justify-between">
