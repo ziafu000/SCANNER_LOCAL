@@ -50,6 +50,13 @@ function isValidQuad(points, totalArea) {
     if (angleDeg < 40 || angleDeg > 140) return false
   }
   if (positive !== 4 && negative !== 4) return false // Not strictly convex
+
+  const topWidth = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
+  const bottomWidth = Math.hypot(points[2].x - points[3].x, points[2].y - points[3].y)
+  const leftHeight = Math.hypot(points[3].x - points[0].x, points[3].y - points[0].y)
+  const rightHeight = Math.hypot(points[2].x - points[1].x, points[2].y - points[1].y)
+  const aspectRatio = (topWidth + bottomWidth) / (leftHeight + rightHeight)
+  if (aspectRatio < 0.2 || aspectRatio > 5) return false
   return true
 }
 
@@ -84,9 +91,12 @@ function findOptimalCorners(imageData) {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
         if (area > 0.08 * totalArea && area < 0.90 * totalArea) {
-          // Reject contours whose bounding box spans the full frame (sensor border artifact)
           const rect = cv.boundingRect(cnt)
-          if (rect.width >= imageData.width * 0.96 && rect.height >= imageData.height * 0.96) {
+          const marginX = Math.max(2, imageData.width * 0.01)
+          const marginY = Math.max(2, imageData.height * 0.01)
+          if (rect.x <= marginX || rect.y <= marginY ||
+              rect.x + rect.width >= imageData.width - marginX ||
+              rect.y + rect.height >= imageData.height - marginY) {
             continue
           }
           candidates.push({ area, cnt: cnt.clone() })
@@ -115,7 +125,8 @@ function findOptimalCorners(imageData) {
             for (let j = 0; j < 4; j++) {
               points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
             }
-            return orderPoints(points)
+            const ordered = orderPoints(points)
+            if (isValidQuad(ordered, totalArea)) return ordered
           }
         } finally {
           approx?.delete()
