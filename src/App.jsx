@@ -348,9 +348,11 @@ export default function App() {
     const v = video.current, o = live.current
     if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
 
-    // Size the overlay canvas to match the displayed video element (CSS pixels)
-    const dispW = v.clientWidth || v.offsetWidth || 700
-    const dispH = v.clientHeight || v.offsetHeight || Math.round(dispW * v.videoHeight / (v.videoWidth || 1))
+    // Size the overlay canvas 1:1 to the container (not the video element) to avoid
+    // iOS Safari flex-height misreporting on the video element itself.
+    const container = v.parentElement
+    const dispW = container ? container.clientWidth : (v.clientWidth || 700)
+    const dispH = container ? container.clientHeight : (v.clientHeight || 700)
     if (o.width !== dispW || o.height !== dispH) { o.width = dispW; o.height = dispH }
 
     const c = o.getContext('2d')
@@ -386,9 +388,9 @@ export default function App() {
     // Draw the overlay (document boundary) using the most recently detected corners
     const normalizedPts = activeCornersRef.current
     if (normalizedPts) {
-      const coverScale = Math.max(o.width / v.videoWidth, o.height / v.videoHeight)
-      const offsetX = (o.width - v.videoWidth * coverScale) / 2
-      const offsetY = (o.height - v.videoHeight * coverScale) / 2
+      const coverScale = Math.max(dispW / v.videoWidth, dispH / v.videoHeight)
+      const offsetX = (dispW - v.videoWidth * coverScale) / 2
+      const offsetY = (dispH - v.videoHeight * coverScale) / 2
       const pts = normalizedPts.map(p => ({
         x: offsetX + p.x * v.videoWidth * coverScale,
         y: offsetY + p.y * v.videoHeight * coverScale,
@@ -1011,9 +1013,9 @@ export default function App() {
         </div>
       </header>
 
-      <div className="relative mx-4 my-1 flex-1 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
-        <video ref={video} playsInline muted className="h-full w-full object-cover" />
-        <canvas ref={live} className="absolute inset-0 h-full w-full object-fill" />
+      <div className="relative mx-4 my-1 flex-1 min-h-0 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
+        <video ref={video} playsInline muted className="absolute inset-0 h-full w-full object-cover" />
+        <canvas ref={live} className="absolute inset-0 h-full w-full pointer-events-none" />
 
         <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
           <div className="flex justify-between">
