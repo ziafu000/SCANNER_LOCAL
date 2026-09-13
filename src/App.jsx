@@ -116,7 +116,7 @@ function findOptimalCorners(canvas) {
       try {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
-        if (area > 0.06 * totalArea && area < 0.98 * totalArea) {
+        if (area > 0.06 * totalArea) {
           candidates.push({ area, cnt: cnt.clone() })
         }
       } finally {
