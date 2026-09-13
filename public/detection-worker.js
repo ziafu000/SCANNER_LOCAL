@@ -40,8 +40,8 @@ function isValidQuad(points, totalArea) {
   const avgH = (left + right) / 2
   if (avgW <= 0 || avgH <= 0) return false
   const ratio = Math.max(avgW, avgH) / Math.min(avgW, avgH)
-  // Document aspect ratio must be between 1.12 and 1.88
-  if (ratio < 1.12 || ratio > 1.88) return false
+  // Document aspect ratio must be between 1.15 and 1.85
+  if (ratio < 1.15 || ratio > 1.85) return false
 
   // Strict convexity and interior angle checks (65 to 115 deg)
   let positive = 0, negative = 0
@@ -113,53 +113,53 @@ function findOptimalCorners(imageData) {
       }
     }
 
-    const candidate = candidates.sort((a, b) => b.area - a.area)[0]
-    if (!candidate) return null
-
-    let hull = null
-    try {
-      hull = new cv.Mat()
-      cv.convexHull(candidate.cnt, hull, false, true)
-      const peri = cv.arcLength(hull, true)
-      const hullArea = cv.contourArea(hull)
-      for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
-        let approx = null
-        try {
-          approx = new cv.Mat()
-          cv.approxPolyDP(hull, approx, epsRatio * peri, true)
-          if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
-            const points = []
-            for (let j = 0; j < 4; j++) {
-              points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+    candidates.sort((a, b) => b.area - a.area)
+    for (const candidate of candidates) {
+      let hull = null
+      try {
+        hull = new cv.Mat()
+        cv.convexHull(candidate.cnt, hull, false, true)
+        const peri = cv.arcLength(hull, true)
+        const hullArea = cv.contourArea(hull)
+        for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+          let approx = null
+          try {
+            approx = new cv.Mat()
+            cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+            if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
+              const points = []
+              for (let j = 0; j < 4; j++) {
+                points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+              }
+              const ordered = orderPoints(points)
+              if (isValidQuad(ordered, totalArea)) return ordered
             }
-            const ordered = orderPoints(points)
-            if (isValidQuad(ordered, totalArea)) return ordered
+          } finally {
+            approx?.delete()
           }
-        } finally {
-          approx?.delete()
         }
-      }
 
-      const n = hull.rows
-      let tl, tr, br, bl
-      let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
-      for (let j = 0; j < n; j++) {
-        const x = hull.data32S[j * 2]
-        const y = hull.data32S[j * 2 + 1]
-        const s = x + y, d = x - y
-        if (s < minSum) { minSum = s; tl = { x, y } }
-        if (s > maxSum) { maxSum = s; br = { x, y } }
-        if (d > maxDiff) { maxDiff = d; tr = { x, y } }
-        if (d < minDiff) { minDiff = d; bl = { x, y } }
+        const n = hull.rows
+        let tl, tr, br, bl
+        let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
+        for (let j = 0; j < n; j++) {
+          const x = hull.data32S[j * 2]
+          const y = hull.data32S[j * 2 + 1]
+          const s = x + y, d = x - y
+          if (s < minSum) { minSum = s; tl = { x, y } }
+          if (s > maxSum) { maxSum = s; br = { x, y } }
+          if (d > maxDiff) { maxDiff = d; tr = { x, y } }
+          if (d < minDiff) { minDiff = d; bl = { x, y } }
+        }
+        if (tl && tr && br && bl) {
+          const extremes = orderPoints([tl, tr, br, bl])
+          if (isValidQuad(extremes, totalArea)) return extremes
+        }
+      } finally {
+        hull?.delete()
       }
-      if (tl && tr && br && bl) {
-        const extremes = orderPoints([tl, tr, br, bl])
-        if (isValidQuad(extremes, totalArea)) return extremes
-      }
-      return null
-    } finally {
-      hull?.delete()
     }
+    return null
   } finally {
     candidates.forEach(({ cnt }) => cnt.delete())
     kernel?.delete()
