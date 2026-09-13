@@ -303,8 +303,8 @@ export default function App() {
   const isDetecting = useRef(false)
   // Timestamp of the last detection kick-off (ms) — used for throttling
   const lastDetectTime = useRef(0)
-  const activeCornersRef = useRef(null)
   const smoothedCornersRef = useRef(null)
+  const lastKnownGoodCornersRef = useRef(null)
   const targetCornersRef = useRef(null)
   const lastValidDetectionTime = useRef(0)
   const [screen, setScreen] = useState('camera')
@@ -408,8 +408,8 @@ export default function App() {
   }, [])
 
   async function startCamera() {
-    activeCornersRef.current = null
     smoothedCornersRef.current = null
+    lastKnownGoodCornersRef.current = null
     targetCornersRef.current = null
     lastValidDetectionTime.current = 0
     isDetecting.current = false
@@ -503,13 +503,11 @@ export default function App() {
           y: curr.y + (aligned[idx].y - curr.y) * LERP,
         }))
       }
+      lastKnownGoodCornersRef.current = smoothedCornersRef.current.map(p => ({ ...p }))
     } else if (timeSinceValid > GRACE_PERIOD + FADE_DURATION) {
       // Only clear after grace period; NEVER snap to full screen
       smoothedCornersRef.current = null
     }
-
-    // Keep activeCornersRef in sync so capture() uses smoothed coords
-    activeCornersRef.current = smoothedCornersRef.current
 
     const alpha = target || timeSinceValid <= GRACE_PERIOD
       ? 1
@@ -579,9 +577,9 @@ export default function App() {
           // Scale from detection canvas coords back to full video resolution
           points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
           detectionGood = true
-        } else if (smoothedCornersRef.current) {
+        } else if (lastKnownGoodCornersRef.current) {
           // Use Last Known Good smoothed corners from live overlay (normalized → pixels)
-          points = smoothedCornersRef.current.map(p => ({
+          points = lastKnownGoodCornersRef.current.map(p => ({
             x: p.x * c.width,
             y: p.y * c.height,
           }))
