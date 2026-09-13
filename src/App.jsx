@@ -182,18 +182,17 @@ function findOptimalCorners(canvas) {
 
     candidates.sort((a, b) => b.area - a.area)
     for (const candidate of candidates) {
-      if (!cv.isContourConvex(candidate.cnt)) continue
       let hull = null
       try {
         hull = new cv.Mat()
         cv.convexHull(candidate.cnt, hull, false, true)
-        const peri = cv.arcLength(hull, true)
+        const peri = cv.arcLength(candidate.cnt, true)
         const hullArea = cv.contourArea(hull)
         for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
           let approx = null
           try {
             approx = new cv.Mat()
-            cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+            cv.approxPolyDP(candidate.cnt, approx, epsRatio * peri, true)
             if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
               const points = []
               for (let j = 0; j < 4; j++) {
@@ -202,26 +201,10 @@ function findOptimalCorners(canvas) {
               const ordered = orderPoints(points)
               if (isValidQuad(ordered, totalArea)) return ordered
             }
+            if (approx.rows === 4) break
           } finally {
             approx?.delete()
           }
-        }
-
-        const n = hull.rows
-        let tl, tr, br, bl
-        let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
-        for (let j = 0; j < n; j++) {
-          const x = hull.data32S[j * 2]
-          const y = hull.data32S[j * 2 + 1]
-          const s = x + y, d = x - y
-          if (s < minSum) { minSum = s; tl = { x, y } }
-          if (s > maxSum) { maxSum = s; br = { x, y } }
-          if (d > maxDiff) { maxDiff = d; tr = { x, y } }
-          if (d < minDiff) { minDiff = d; bl = { x, y } }
-        }
-        if (tl && tr && br && bl) {
-          const extremes = orderPoints([tl, tr, br, bl])
-          if (isValidQuad(extremes, totalArea)) return extremes
         }
       } finally {
         hull?.delete()
