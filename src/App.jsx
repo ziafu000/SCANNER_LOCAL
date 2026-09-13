@@ -76,13 +76,54 @@ function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
-function isValidQuad(points) {
-  if (new Set(points.map(({ x, y }) => `${x},${y}`)).size !== 4) return false
-  const area = points.reduce((sum, point, index) => {
-    const next = points[(index + 1) % points.length]
-    return sum + point.x * next.y - next.x * point.y
-  }, 0)
-  return Math.abs(area) > 1
+function isValidQuad(points, totalArea) {
+  if (!points || points.length !== 4) return false
+  // Check distinct points
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      if (Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < 10) return false
+    }
+  }
+  // Area check via Shoelace formula
+  let signedArea = 0
+  for (let i = 0; i < 4; i++) {
+    const next = points[(i + 1) % 4]
+    signedArea += points[i].x * next.y - next.x * points[i].y
+  }
+  const area = Math.abs(signedArea) * 0.5
+  if (totalArea !== undefined && (area < 0.08 * totalArea || area > 0.90 * totalArea)) return false
+  if (totalArea === undefined && area < 1) return false
+
+  // Strict convexity and angle bounds
+  let positive = 0, negative = 0
+  for (let i = 0; i < 4; i++) {
+    const p0 = points[(i + 3) % 4]
+    const p1 = points[i]
+    const p2 = points[(i + 1) % 4]
+    const dx1 = p1.x - p0.x, dy1 = p1.y - p0.y
+    const dx2 = p2.x - p1.x, dy2 = p2.y - p1.y
+    const cross = dx1 * dy2 - dy1 * dx2
+    if (cross > 0) positive++
+    if (cross < 0) negative++
+
+    // Angle check between edges p0->p1 and p1->p2
+    const dot = dx1 * dx2 + dy1 * dy2
+    const mag1 = Math.hypot(dx1, dy1)
+    const mag2 = Math.hypot(dx2, dy2)
+    if (mag1 === 0 || mag2 === 0) return false
+    const cosTheta = Math.max(-1, Math.min(1, dot / (mag1 * mag2)))
+    const angleDeg = Math.acos(cosTheta) * (180 / Math.PI)
+    if (angleDeg < 40 || angleDeg > 140) return false
+  }
+  if (positive !== 4 && negative !== 4) return false // Not strictly convex
+
+  const topWidth = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
+  const bottomWidth = Math.hypot(points[2].x - points[3].x, points[2].y - points[3].y)
+  const leftHeight = Math.hypot(points[3].x - points[0].x, points[3].y - points[0].y)
+  const rightHeight = Math.hypot(points[2].x - points[1].x, points[2].y - points[1].y)
+  const aspectRatio = (topWidth + bottomWidth) / (leftHeight + rightHeight)
+  if (aspectRatio < 0.2 || aspectRatio > 5) return false
+  return true
 }
 
 function findOptimalCorners(canvas) {
@@ -116,7 +157,15 @@ function findOptimalCorners(canvas) {
       try {
         cnt = contours.get(i)
         const area = cv.contourArea(cnt)
-        if (area > 0.06 * totalArea) {
+        if (area > 0.08 * totalArea && area < 0.90 * totalArea) {
+          const rect = cv.boundingRect(cnt)
+          const marginX = Math.max(2, canvas.width * 0.01)
+          const marginY = Math.max(2, canvas.height * 0.01)
+          if (rect.x <= marginX || rect.y <= marginY ||
+              rect.x + rect.width >= canvas.width - marginX ||
+              rect.y + rect.height >= canvas.height - marginY) {
+            continue
+          }
           candidates.push({ area, cnt: cnt.clone() })
         }
       } finally {
@@ -143,7 +192,8 @@ function findOptimalCorners(canvas) {
             for (let j = 0; j < 4; j++) {
               points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
             }
-            return orderPoints(points)
+            const ordered = orderPoints(points)
+            if (isValidQuad(ordered, totalArea)) return ordered
           }
         } finally {
           approx?.delete()
@@ -164,7 +214,7 @@ function findOptimalCorners(canvas) {
       }
       if (tl && tr && br && bl) {
         const extremes = orderPoints([tl, tr, br, bl])
-        if (isValidQuad(extremes)) return extremes
+        if (isValidQuad(extremes, totalArea)) return extremes
       }
       return null
     } finally {
@@ -221,6 +271,9 @@ export default function App() {
   // Timestamp of the last detection kick-off (ms) — used for throttling
   const lastDetectTime = useRef(0)
   const activeCornersRef = useRef(null)
+  const smoothedCornersRef = useRef(null)
+  const targetCornersRef = useRef(null)
+  const lastValidDetectionTime = useRef(0)
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -265,10 +318,15 @@ export default function App() {
     detectionWorker.current = worker
     worker.onmessage = ({ data }) => {
       if (data.id !== detectionRequest.current) return
-      activeCornersRef.current = data.points?.map(p => ({
-        x: p.x / data.width,
-        y: p.y / data.height,
-      })) ?? null
+      if (data.points) {
+        targetCornersRef.current = data.points.map(p => ({
+          x: p.x / data.width,
+          y: p.y / data.height,
+        }))
+        lastValidDetectionTime.current = performance.now()
+      } else {
+        targetCornersRef.current = null
+      }
       isDetecting.current = false
     }
     worker.onerror = () => {
@@ -318,6 +376,9 @@ export default function App() {
 
   async function startCamera() {
     activeCornersRef.current = null
+    smoothedCornersRef.current = null
+    targetCornersRef.current = null
+    lastValidDetectionTime.current = 0
     isDetecting.current = false
     detectionRequest.current++
     lastDetectTime.current = 0
@@ -388,9 +449,33 @@ export default function App() {
       }, [imageData.data.buffer])
     }
 
-    // Draw the overlay (document boundary) using the most recently detected corners
-    const normalizedPts = activeCornersRef.current
-    if (normalizedPts) {
+    // Draw the overlay (document boundary) using smoothed corners with grace period
+    const now2 = performance.now()
+    const target = targetCornersRef.current
+    const timeSinceValid = now2 - lastValidDetectionTime.current
+    const GRACE_PERIOD = 450 // ms
+
+    if (target) {
+      if (!smoothedCornersRef.current) {
+        smoothedCornersRef.current = target.map(p => ({ ...p }))
+      } else {
+        // Lerp towards target: 0.32 factor at 60 FPS smoothly bridges 80ms worker ticks
+        const LERP = 0.32
+        smoothedCornersRef.current = smoothedCornersRef.current.map((curr, idx) => ({
+          x: curr.x + (target[idx].x - curr.x) * LERP,
+          y: curr.y + (target[idx].y - curr.y) * LERP,
+        }))
+      }
+    } else if (timeSinceValid > GRACE_PERIOD) {
+      smoothedCornersRef.current = null
+    }
+
+    // Keep activeCornersRef in sync so capture() uses smoothed coords
+    activeCornersRef.current = smoothedCornersRef.current
+
+    const alpha = target ? 1 : Math.max(0, 1 - (timeSinceValid / GRACE_PERIOD))
+    const normalizedPts = smoothedCornersRef.current
+    if (normalizedPts && alpha > 0) {
       const coverScale = Math.max(dispW / v.videoWidth, dispH / v.videoHeight)
       const offsetX = (dispW - v.videoWidth * coverScale) / 2
       const offsetY = (dispH - v.videoHeight * coverScale) / 2
@@ -398,7 +483,7 @@ export default function App() {
         x: offsetX + p.x * v.videoWidth * coverScale,
         y: offsetY + p.y * v.videoHeight * coverScale,
       }))
-      c.strokeStyle = '#10b981'
+      c.strokeStyle = `rgba(16, 185, 129, ${alpha})`
       c.lineWidth = 4
       c.beginPath()
       c.moveTo(pts[0].x, pts[0].y)
@@ -408,15 +493,15 @@ export default function App() {
       c.closePath()
       c.stroke()
 
-      c.fillStyle = 'rgba(16, 185, 129, 0.12)'
+      c.fillStyle = `rgba(16, 185, 129, ${0.12 * alpha})`
       c.fill()
 
       for (const pt of pts) {
-        c.fillStyle = '#ffffff'
+        c.fillStyle = `rgba(255, 255, 255, ${alpha})`
         c.beginPath()
         c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
         c.fill()
-        c.strokeStyle = '#10b981'
+        c.strokeStyle = `rgba(16, 185, 129, ${alpha})`
         c.lineWidth = 2
         c.stroke()
       }
@@ -450,9 +535,16 @@ export default function App() {
         dc.getContext('2d').drawImage(c, 0, 0, dw, dh)
 
         const scaledPoints = findOptimalCorners(dc)
-        if (scaledPoints) {
+        if (scaledPoints && isValidQuad(scaledPoints, dw * dh)) {
           // Scale from offscreen coords back to full video resolution
           points = scaledPoints.map(p => ({ x: p.x / detScale, y: p.y / detScale }))
+          detectionGood = true
+        } else if (smoothedCornersRef.current) {
+          // Fall back to the frozen smoothed corners from the live overlay
+          points = smoothedCornersRef.current.map(p => ({
+            x: p.x * c.width,
+            y: p.y * c.height,
+          }))
           detectionGood = true
         } else if (activeCornersRef.current) {
           points = activeCornersRef.current.map(p => ({
