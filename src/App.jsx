@@ -88,73 +88,68 @@ function isValidQuad(points) {
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
   const totalArea = canvas.width * canvas.height
-  const src = cv.imread(canvas)
-  const gray = new cv.Mat()
-  const edged = new cv.Mat()
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
+  let src = null
+  let gray = null
+  let edged = null
+  let contours = null
+  let hierarchy = null
+  let kernel = null
   const candidates = []
 
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-  cv.Canny(gray, edged, 40, 140)
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
-  cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
-  kernel.delete()
-  cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+  try {
+    src = cv.imread(canvas)
+    gray = new cv.Mat()
+    edged = new cv.Mat()
+    contours = new cv.MatVector()
+    hierarchy = new cv.Mat()
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+    cv.Canny(gray, edged, 40, 140)
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
+    cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
+    kernel.delete()
+    kernel = null
+    cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-  for (let i = 0; i < contours.size(); ++i) {
-    const cnt = contours.get(i)
-    const area = cv.contourArea(cnt)
-    if (area > 0.06 * totalArea && area < 0.98 * totalArea) {
-      candidates.push({ area, cnt: cnt.clone() })
+    for (let i = 0; i < contours.size(); ++i) {
+      let cnt = null
+      try {
+        cnt = contours.get(i)
+        const area = cv.contourArea(cnt)
+        if (area > 0.06 * totalArea && area < 0.98 * totalArea) {
+          candidates.push({ area, cnt: cnt.clone() })
+        }
+      } finally {
+        cnt?.delete()
+      }
     }
-    cnt.delete()
-  }
-  candidates.sort((a, b) => b.area - a.area)
 
-  let points = null
+    const candidate = candidates.sort((a, b) => b.area - a.area)[0]
+    if (!candidate) return null
 
-  for (let i = 0; i < candidates.length; i++) {
-    // Prevent snapping to inner illustrations: skip if much smaller than largest
-    if (i > 0 && candidates[i].area < 0.45 * candidates[0].area) break
-
-    const { cnt } = candidates[i]
-
-    // Compute convex hull to smooth noisy contour edges
-    const hull = new cv.Mat()
-    cv.convexHull(cnt, hull, false, true)
-
-    // Multi-epsilon sweep on convex hull
-    let found = null
-    const peri = cv.arcLength(hull, true)
-    for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
-      const approx = new cv.Mat()
-      cv.approxPolyDP(hull, approx, epsRatio * peri, true)
-      if (approx.rows === 4 && cv.isContourConvex(approx)) {
-        const approxArea = cv.contourArea(approx)
-        const hullArea = cv.contourArea(hull)
-        if (hullArea > 0 && approxArea / hullArea > 0.65) {
-          const pts = []
-          for (let j = 0; j < 4; j++) {
-            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+    let hull = null
+    try {
+      hull = new cv.Mat()
+      cv.convexHull(candidate.cnt, hull, false, true)
+      const peri = cv.arcLength(hull, true)
+      const hullArea = cv.contourArea(hull)
+      for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+        let approx = null
+        try {
+          approx = new cv.Mat()
+          cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+          if (approx.rows === 4 && cv.isContourConvex(approx) && hullArea > 0 && cv.contourArea(approx) / hullArea > 0.65) {
+            const points = []
+            for (let j = 0; j < 4; j++) {
+              points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+            }
+            return orderPoints(points)
           }
-          found = orderPoints(pts)
-          approx.delete()
-          break
+        } finally {
+          approx?.delete()
         }
       }
-      approx.delete()
-    }
 
-    if (found) {
-      hull.delete()
-      points = found
-      break
-    }
-
-    // Extreme-diagonal fallback: 4 extreme hull vertices — never overshoots onto desk mat
-    if (i === 0 && !found) {
       const n = hull.rows
       let tl, tr, br, bl
       let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
@@ -169,22 +164,21 @@ function findOptimalCorners(canvas) {
       }
       if (tl && tr && br && bl) {
         const extremes = orderPoints([tl, tr, br, bl])
-        if (isValidQuad(extremes)) points = extremes
+        if (isValidQuad(extremes)) return extremes
       }
+      return null
+    } finally {
+      hull?.delete()
     }
-
-    hull.delete()
-    if (points) break
+  } finally {
+    candidates.forEach(({ cnt }) => cnt.delete())
+    kernel?.delete()
+    hierarchy?.delete()
+    contours?.delete()
+    edged?.delete()
+    gray?.delete()
+    src?.delete()
   }
-
-  candidates.forEach(c => c.cnt.delete())
-  contours.delete()
-  hierarchy.delete()
-  edged.delete()
-  gray.delete()
-  src.delete()
-
-  return points
 }
 
 function customExtract(srcCanvas, pts) {
