@@ -11,6 +11,7 @@ function orderPoints(pts) {
 }
 
 function findOptimalCorners(imageData) {
+  const totalArea = imageData.width * imageData.height
   const src = cv.matFromImageData(imageData)
   const gray = new cv.Mat()
   const edged = new cv.Mat()
@@ -20,54 +21,84 @@ function findOptimalCorners(imageData) {
 
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
   cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-  cv.Canny(gray, edged, 75, 200)
+  cv.Canny(gray, edged, 40, 140)
   const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
   cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
   kernel.delete()
   cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-  const minArea = imageData.width * imageData.height * 0.05
   for (let i = 0; i < contours.size(); i++) {
     const cnt = contours.get(i)
     const area = cv.contourArea(cnt)
-    if (area > minArea) candidates.push({ area, cnt: cnt.clone() })
+    if (area > 0.06 * totalArea && area < 0.98 * totalArea) {
+      candidates.push({ area, cnt: cnt.clone() })
+    }
     cnt.delete()
   }
   candidates.sort((a, b) => b.area - a.area)
 
   let points = null
-  let fallbackPoints = null
+
   for (let i = 0; i < candidates.length; i++) {
+    // Prevent snapping to inner illustrations: skip if candidate is much smaller than largest
+    if (i > 0 && candidates[i].area < 0.45 * candidates[0].area) break
+
     const { cnt } = candidates[i]
-    const approx = new cv.Mat()
-    cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true)
-    if (approx.rows === 4) {
-      const pts = []
-      for (let j = 0; j < 4; j++) {
-        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+
+    // Compute convex hull first to smooth noisy contour edges
+    const hull = new cv.Mat()
+    cv.convexHull(cnt, hull, false, true)
+
+    // Multi-epsilon sweep on the convex hull
+    let found = null
+    const peri = cv.arcLength(hull, true)
+    for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+      const approx = new cv.Mat()
+      cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        const approxArea = cv.contourArea(approx)
+        const hullArea = cv.contourArea(hull)
+        if (hullArea > 0 && approxArea / hullArea > 0.65) {
+          const pts = []
+          for (let j = 0; j < 4; j++) {
+            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+          }
+          found = orderPoints(pts)
+          approx.delete()
+          break
+        }
       }
-      points = orderPoints(pts)
       approx.delete()
+    }
+
+    if (found) {
+      hull.delete()
+      points = found
+      // If the largest candidate yields a valid quad, use it and stop
       break
     }
-    if (i === 0) {
-      const rect = cv.minAreaRect(cnt)
-      const angle = rect.angle * Math.PI / 180
-      const cosA = Math.cos(angle)
-      const sinA = Math.sin(angle)
-      const halfWidth = rect.size.width / 2
-      const halfHeight = rect.size.height / 2
-      fallbackPoints = orderPoints([
-        { x: -halfWidth, y: -halfHeight },
-        { x: halfWidth, y: -halfHeight },
-        { x: halfWidth, y: halfHeight },
-        { x: -halfWidth, y: halfHeight },
-      ].map(p => ({
-        x: rect.center.x + p.x * cosA - p.y * sinA,
-        y: rect.center.y + p.x * sinA + p.y * cosA,
-      })))
+
+    // Extreme-diagonal fallback: extract 4 extreme hull vertices (never overshoots)
+    if (i === 0 && !found) {
+      const n = hull.rows
+      let tl, tr, br, bl
+      let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
+      for (let j = 0; j < n; j++) {
+        const x = hull.data32S[j * 2]
+        const y = hull.data32S[j * 2 + 1]
+        const s = x + y, d = x - y
+        if (s < minSum) { minSum = s; tl = { x, y } }
+        if (s > maxSum) { maxSum = s; br = { x, y } }
+        if (d > maxDiff) { maxDiff = d; tr = { x, y } }
+        if (d < minDiff) { minDiff = d; bl = { x, y } }
+      }
+      if (tl && tr && br && bl) {
+        points = orderPoints([tl, tr, br, bl])
+      }
     }
-    approx.delete()
+
+    hull.delete()
+    if (points) break
   }
 
   candidates.forEach(({ cnt }) => cnt.delete())
@@ -76,7 +107,8 @@ function findOptimalCorners(imageData) {
   edged.delete()
   gray.delete()
   src.delete()
-  return points || fallbackPoints
+
+  return points
 }
 
 function detect(message) {

@@ -78,101 +78,96 @@ function orderPoints(pts) {
 
 function findOptimalCorners(canvas) {
   if (!window.cv) return null
+  const totalArea = canvas.width * canvas.height
   const src = cv.imread(canvas)
   const gray = new cv.Mat()
+  const edged = new cv.Mat()
+  const contours = new cv.MatVector()
+  const hierarchy = new cv.Mat()
+  const candidates = []
+
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
   cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
-  const edged = new cv.Mat()
-  cv.Canny(gray, edged, 75, 200)
-
+  cv.Canny(gray, edged, 40, 140)
   const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
   cv.morphologyEx(edged, edged, cv.MORPH_CLOSE, kernel)
   kernel.delete()
-
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
   cv.findContours(edged, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-  let candidates = []
-  const minArea = canvas.width * canvas.height * 0.05
 
   for (let i = 0; i < contours.size(); ++i) {
     const cnt = contours.get(i)
     const area = cv.contourArea(cnt)
-    if (area > minArea) {
+    if (area > 0.06 * totalArea && area < 0.98 * totalArea) {
       candidates.push({ area, cnt: cnt.clone() })
     }
     cnt.delete()
   }
-
   candidates.sort((a, b) => b.area - a.area)
 
   let points = null
-  let fallbackPoints = null
 
   for (let i = 0; i < candidates.length; i++) {
+    // Prevent snapping to inner illustrations: skip if much smaller than largest
+    if (i > 0 && candidates[i].area < 0.45 * candidates[0].area) break
+
     const { cnt } = candidates[i]
-    const peri = cv.arcLength(cnt, true)
-    const approx = new cv.Mat()
-    cv.approxPolyDP(cnt, approx, 0.02 * peri, true)
 
-    if (approx.rows === 4) {
-      const pts = []
-      for (let j = 0; j < 4; j++) {
-        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
-      }
-      points = orderPoints(pts)
-      approx.delete()
-      break
-    } else if (i === 0) {
-      const pts = []
-      const rect = cv.minAreaRect(cnt)
-      let usedBoxPoints = false
-      if (cv.boxPoints) {
-        try {
-          const box = new cv.Mat()
-          cv.boxPoints(rect, box)
+    // Compute convex hull to smooth noisy contour edges
+    const hull = new cv.Mat()
+    cv.convexHull(cnt, hull, false, true)
+
+    // Multi-epsilon sweep on convex hull
+    let found = null
+    const peri = cv.arcLength(hull, true)
+    for (const epsRatio of [0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06]) {
+      const approx = new cv.Mat()
+      cv.approxPolyDP(hull, approx, epsRatio * peri, true)
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        const approxArea = cv.contourArea(approx)
+        const hullArea = cv.contourArea(hull)
+        if (hullArea > 0 && approxArea / hullArea > 0.65) {
+          const pts = []
           for (let j = 0; j < 4; j++) {
-            pts.push({ x: box.data32F[j * 2], y: box.data32F[j * 2 + 1] })
+            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
           }
-          box.delete()
-          usedBoxPoints = true
-        } catch (e) {
-          console.warn('cv.boxPoints failed, falling back to manual calculation', e)
+          found = orderPoints(pts)
+          approx.delete()
+          break
         }
       }
-      
-      if (!usedBoxPoints) {
-        const cx = rect.center.x, cy = rect.center.y
-        const w = rect.size.width / 2, h = rect.size.height / 2
-        const angle = (rect.angle * Math.PI) / 180.0
-        const cosA = Math.cos(angle), sinA = Math.sin(angle)
-        const offsets = [
-          { x: -w, y: -h },
-          { x: w, y: -h },
-          { x: w, y: h },
-          { x: -w, y: h }
-        ]
-        for (const p of offsets) {
-          pts.push({
-            x: cx + p.x * cosA - p.y * sinA,
-            y: cy + p.x * sinA + p.y * cosA
-          })
-        }
-      }
-      fallbackPoints = orderPoints(pts)
+      approx.delete()
     }
-    approx.delete()
+
+    if (found) {
+      hull.delete()
+      points = found
+      break
+    }
+
+    // Extreme-diagonal fallback: 4 extreme hull vertices — never overshoots onto desk mat
+    if (i === 0 && !found) {
+      const n = hull.rows
+      let tl, tr, br, bl
+      let minSum = Infinity, maxSum = -Infinity, maxDiff = -Infinity, minDiff = Infinity
+      for (let j = 0; j < n; j++) {
+        const x = hull.data32S[j * 2]
+        const y = hull.data32S[j * 2 + 1]
+        const s = x + y, d = x - y
+        if (s < minSum) { minSum = s; tl = { x, y } }
+        if (s > maxSum) { maxSum = s; br = { x, y } }
+        if (d > maxDiff) { maxDiff = d; tr = { x, y } }
+        if (d < minDiff) { minDiff = d; bl = { x, y } }
+      }
+      if (tl && tr && br && bl) {
+        points = orderPoints([tl, tr, br, bl])
+      }
+    }
+
+    hull.delete()
+    if (points) break
   }
 
-  if (!points && fallbackPoints) {
-    points = fallbackPoints
-  }
-
-  for (const c of candidates) {
-    c.cnt.delete()
-  }
-
+  candidates.forEach(c => c.cnt.delete())
   contours.delete()
   hierarchy.delete()
   edged.delete()
@@ -346,14 +341,18 @@ export default function App() {
 
   function drawLive() {
     const v = video.current, o = live.current
-    if (!v || !o || v.readyState < 2) { frame.current = requestAnimationFrame(drawLive); return }
+    if (!v || !o || v.readyState < 2 || !v.videoWidth || !v.videoHeight) { frame.current = requestAnimationFrame(drawLive); return }
 
-    // Size the overlay canvas 1:1 to the container (not the video element) to avoid
-    // iOS Safari flex-height misreporting on the video element itself.
+    // Size the overlay canvas 1:1 to the container using getBoundingClientRect for
+    // reliable dimensions on iOS Safari (clientWidth/Height can misreport during flex layout).
     const container = v.parentElement
-    const dispW = container ? container.clientWidth : (v.clientWidth || 700)
-    const dispH = container ? container.clientHeight : (v.clientHeight || 700)
-    if (o.width !== dispW || o.height !== dispH) { o.width = dispW; o.height = dispH }
+    const rect = container ? container.getBoundingClientRect() : null
+    const dispW = rect ? Math.round(rect.width) : (v.clientWidth || 700)
+    const dispH = rect ? Math.round(rect.height) : (v.clientHeight || 700)
+    if (dispW > 0 && dispH > 0 && (o.width !== dispW || o.height !== dispH)) {
+      o.width = dispW
+      o.height = dispH
+    }
 
     const c = o.getContext('2d')
     // Clear overlay — the <video> element renders the live feed natively at 60 FPS
@@ -975,7 +974,7 @@ export default function App() {
 
   /* ───────── Camera Screen (default) ───────── */
   return (
-    <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
+    <main className="safe flex h-[100dvh] max-h-[100dvh] flex-col bg-slate-950 justify-between overflow-hidden">
       <header className="px-4 pt-1 pb-2">
         <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
           <div className="flex items-center gap-2.5">
@@ -1014,8 +1013,19 @@ export default function App() {
       </header>
 
       <div className="relative mx-4 my-1 flex-1 min-h-0 overflow-hidden rounded-3xl bg-black shadow-2xl ring-1 ring-white/10">
-        <video ref={video} playsInline muted className="absolute inset-0 h-full w-full object-cover" />
-        <canvas ref={live} className="absolute inset-0 h-full w-full pointer-events-none" />
+        <video
+          ref={video}
+          playsInline
+          muted
+          autoPlay
+          className="absolute inset-0 h-full w-full object-cover"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+        <canvas
+          ref={live}
+          className="absolute inset-0 h-full w-full pointer-events-none"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+        />
 
         <div className="pointer-events-none absolute inset-6 flex flex-col justify-between opacity-60">
           <div className="flex justify-between">
