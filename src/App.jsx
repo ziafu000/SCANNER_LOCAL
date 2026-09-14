@@ -626,6 +626,8 @@ export default function App() {
   // Quick export for a single page
   async function exportSinglePage(blob, fileName) {
     if (processingRef.current) return
+    processingRef.current = true
+    setProcessing(true)
     try {
       const file = new File([blob], fileName, { type: 'image/jpeg' })
       const ok = await shareOrDownloadImages([file], fileName)
@@ -635,6 +637,9 @@ export default function App() {
     } catch (err) {
       console.error('Lỗi khi lưu ảnh trang:', err)
       showToast('Không thể lưu ảnh trang')
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
   }
 
@@ -651,7 +656,11 @@ export default function App() {
         new File([p.blob], `${name}-trang-${i + 1}.jpg`, { type: 'image/jpeg' })
       )
 
-      await shareOrDownloadImages(files, name)
+      const ok = await shareOrDownloadImages(files, name)
+      if (!ok) {
+        setStatus('Sẵn sàng quét')
+        return
+      }
 
       const record = {
         id: uid(),
