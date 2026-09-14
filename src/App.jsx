@@ -17,7 +17,8 @@ import {
   Sliders,
   Sparkles,
   RefreshCw,
-  FolderOpen
+  FolderOpen,
+  Image as ImageIcon
 } from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
 
@@ -587,8 +588,94 @@ export default function App() {
     const a = document.createElement('a')
     a.href = urlOf(blob)
     a.download = name
+    document.body.appendChild(a)
     a.click()
-    setTimeout(() => URL.revokeObjectURL(a.href), 500)
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+
+  // Share or download JPEG images with Web Share API and download fallback
+  async function shareOrDownloadImages(files, title = 'Tài liệu quét') {
+    if (typeof navigator !== 'undefined' && navigator.canShare) {
+      try {
+        if (navigator.canShare({ files })) {
+          await navigator.share({
+            files,
+            title,
+          })
+          return true
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          return false
+        }
+        console.warn('Web Share failed, falling back to download:', err)
+      }
+    }
+
+    // Fallback: download each file
+    for (let i = 0; i < files.length; i++) {
+      download(files[i], files[i].name)
+      if (files.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+    }
+    return true
+  }
+
+  // Quick export for a single page
+  async function exportSinglePage(blob, fileName) {
+    if (processingRef.current) return
+    try {
+      const file = new File([blob], fileName, { type: 'image/jpeg' })
+      const ok = await shareOrDownloadImages([file], fileName)
+      if (ok) {
+        showToast('Đã lưu ảnh trang')
+      }
+    } catch (err) {
+      console.error('Lỗi khi lưu ảnh trang:', err)
+      showToast('Không thể lưu ảnh trang')
+    }
+  }
+
+  // Export JPEG images from the current cart (pages[]) to Apple Photos / Download and save to gallery
+  async function exportCartImages() {
+    if (processingRef.current || !pages.length) return
+    processingRef.current = true
+    setProcessing(true)
+    const items = [...pages]
+    try {
+      setStatus('Đang chuẩn bị ảnh…')
+      const name = docName.trim() || defaultDocName()
+      const files = items.map((p, i) =>
+        new File([p.blob], `${name}-trang-${i + 1}.jpg`, { type: 'image/jpeg' })
+      )
+
+      await shareOrDownloadImages(files, name)
+
+      const record = {
+        id: uid(),
+        name,
+        createdAt: Date.now(),
+        pages: items.map(x => x.blob),
+      }
+      await putScan(record)
+      await refreshGallery()
+      items.forEach(page => URL.revokeObjectURL(page.url))
+      setPages([])
+      setDocName(defaultDocName())
+      setScreen('camera')
+      setStatus('Đã lưu vào Album ảnh & Thư viện')
+      showToast('Đã lưu tài liệu vào Thư viện')
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await startCamera()
+    } catch (err) {
+      console.error('Lỗi khi xuất ảnh:', err)
+      showToast('Không thể xuất ảnh')
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
+    }
   }
 
   // Export PDF from the current cart (pages[]) and save to gallery
@@ -643,28 +730,64 @@ export default function App() {
     }
   }
 
+  // Export JPEG images from a gallery record (view-only)
+  async function exportRecordImages(record) {
+    if (processingRef.current || !record?.pages?.length) return
+    processingRef.current = true
+    setProcessing(true)
+    setStatus('Đang chuẩn bị ảnh…')
+    try {
+      const name = record.name || defaultDocName()
+      const files = record.pages.map((blob, i) =>
+        new File([blob], `${name}-trang-${i + 1}.jpg`, { type: 'image/jpeg' })
+      )
+      const ok = await shareOrDownloadImages(files, name)
+      if (ok) {
+        showToast('Đã lưu vào Album ảnh')
+      }
+      setStatus('Sẵn sàng quét')
+    } catch (err) {
+      console.error('Lỗi khi xuất bộ ảnh:', err)
+      showToast('Không thể xuất bộ ảnh')
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
+    }
+  }
+
   // Export PDF from a gallery record (view-only)
   async function exportRecordPdf(record) {
-    if (!record?.pages?.length) return
+    if (processingRef.current || !record?.pages?.length) return
+    processingRef.current = true
+    setProcessing(true)
     setStatus('Đang tạo PDF…')
-    let pdf = null
-    const items = record.pages.map(blob => ({ blob, url: urlOf(blob) }))
-    for (let i = 0; i < items.length; i++) {
-      const im = await loadImage(items[i].url)
-      const imgWidth = im.naturalWidth || im.width
-      const imgHeight = im.naturalHeight || im.height
-      const orientation = imgWidth > imgHeight ? 'l' : 'p'
-      if (i === 0) {
-        pdf = new jsPDF({ orientation, unit: 'px', format: [imgWidth, imgHeight], hotfixes: ['px_scaling'] })
-      } else {
-        pdf.addPage([imgWidth, imgHeight], orientation)
+    try {
+      let pdf = null
+      const items = record.pages.map(blob => ({ blob, url: urlOf(blob) }))
+      for (let i = 0; i < items.length; i++) {
+        const im = await loadImage(items[i].url)
+        const imgWidth = im.naturalWidth || im.width
+        const imgHeight = im.naturalHeight || im.height
+        const orientation = imgWidth > imgHeight ? 'l' : 'p'
+        if (i === 0) {
+          pdf = new jsPDF({ orientation, unit: 'px', format: [imgWidth, imgHeight], hotfixes: ['px_scaling'] })
+        } else {
+          pdf.addPage([imgWidth, imgHeight], orientation)
+        }
+        pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
+        URL.revokeObjectURL(items[i].url)
       }
-      pdf.addImage(items[i].url, 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST')
-      URL.revokeObjectURL(items[i].url)
+      const b = pdf.output('blob')
+      download(b, `${record.name}.pdf`)
+      setStatus('Sẵn sàng quét')
+      showToast('Đã xuất file PDF')
+    } catch (err) {
+      console.error('Lỗi khi tạo PDF:', err)
+      showToast('Không thể tạo file PDF')
+    } finally {
+      processingRef.current = false
+      setProcessing(false)
     }
-    const b = pdf.output('blob')
-    download(b, `${record.name}.pdf`)
-    setStatus('Sẵn sàng quét')
   }
 
   function movePage(from, to) {
@@ -835,18 +958,41 @@ export default function App() {
                   <div className="absolute top-4 left-4 rounded-lg glass-pill px-2.5 py-1 text-xs font-bold text-white shadow-md">
                     Trang {i + 1}
                   </div>
+                  <button
+                    disabled={processing}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      exportSinglePage(p.blob, `${rec?.name || 'tai-lieu'}-trang-${i + 1}.jpg`)
+                    }}
+                    className="tap absolute top-4 right-4 flex h-8 w-8 items-center justify-center rounded-lg glass-pill text-white active:scale-90 transition-all shadow-md bg-black/40 hover:bg-black/60 border border-white/20 disabled:opacity-50"
+                    aria-label={`Lưu ảnh trang ${i + 1}`}
+                    title="Lưu ảnh trang này"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
                 </div>
               ))}
             </div>
           </div>
 
-          <button
-            className="tap mt-4 w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
-            onClick={() => exportRecordPdf(rec)}
-          >
-            <Download className="h-5 w-5 stroke-[2.5]" />
-            <span>Xuất lại file PDF</span>
-          </button>
+          <div className="flex gap-2.5 mt-4">
+            <button
+              disabled={processing}
+              className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-sky-400 to-teal-400 py-4 px-2 text-sm sm:text-base font-bold text-slate-950 shadow-lg shadow-sky-500/20 active:scale-95 transition-all disabled:opacity-50"
+              onClick={() => exportRecordImages(rec)}
+            >
+              <ImageIcon className="h-5 w-5 stroke-[2.5]" />
+              <span>Lưu vào Album ảnh</span>
+            </button>
+            <button
+              disabled={processing}
+              className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 px-2 text-sm sm:text-base font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+              onClick={() => exportRecordPdf(rec)}
+            >
+              <Download className="h-5 w-5 stroke-[2.5]" />
+              <span>Xuất lại file PDF</span>
+            </button>
+          </div>
         </main>
       </>
     )
@@ -896,10 +1042,19 @@ export default function App() {
                     alt={`Trang ${i + 1}`}
                   />
                   <div className="flex-1 min-w-0">
-                    <b className="block text-base font-bold text-white">Trang {i + 1}</b>
-                    <span className="text-xs text-slate-400">Kéo thả hoặc bấm mũi tên để xếp</span>
+                    <b className="block text-base font-bold text-white truncate">Trang {i + 1}</b>
+                    <span className="text-xs text-slate-400 truncate block">Kéo thả hoặc bấm mũi tên để xếp</span>
                   </div>
                   <div className="flex items-center gap-1">
+                    <button
+                      disabled={processing}
+                      className="tap flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300 border border-sky-500/20 active:scale-90 transition-all disabled:opacity-30"
+                      onClick={() => exportSinglePage(p.blob, `${docName.trim() || 'tai-lieu'}-trang-${i + 1}.jpg`)}
+                      aria-label={`Lưu ảnh trang ${i + 1}`}
+                      title="Lưu ảnh trang này"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
                     <button
                       disabled={processing || i === 0}
                       className="tap flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-slate-300 active:scale-90 transition-all disabled:opacity-30"
@@ -933,14 +1088,24 @@ export default function App() {
 
         <div className="flex flex-col gap-2.5 pt-4">
           {pages.length > 0 && (
-            <button
-              disabled={processing}
-              className="tap flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
-              onClick={exportCartPdf}
-            >
-              <Download className="h-5 w-5 stroke-[2.5]" />
-              <span>Xong &amp; Xuất PDF ({pages.length} trang)</span>
-            </button>
+            <div className="flex gap-2.5">
+              <button
+                disabled={processing}
+                className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-sky-400 to-teal-400 py-4 px-2 text-sm sm:text-base font-bold text-slate-950 shadow-lg shadow-sky-500/20 active:scale-95 transition-all disabled:opacity-50"
+                onClick={exportCartImages}
+              >
+                <ImageIcon className="h-5 w-5 stroke-[2.5]" />
+                <span>Lưu vào Album ảnh</span>
+              </button>
+              <button
+                disabled={processing}
+                className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 px-2 text-sm sm:text-base font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+                onClick={exportCartPdf}
+              >
+                <Download className="h-5 w-5 stroke-[2.5]" />
+                <span>Xong &amp; Xuất PDF</span>
+              </button>
+            </div>
           )}
           <button
             disabled={processing}
