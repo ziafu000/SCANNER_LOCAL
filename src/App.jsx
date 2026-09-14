@@ -21,6 +21,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
+import { download, shareOrDownloadImages } from './export'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
@@ -584,45 +585,6 @@ export default function App() {
     }
   }
 
-  const download = (blob, name) => {
-    const a = document.createElement('a')
-    a.href = urlOf(blob)
-    a.download = name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-  }
-
-  // Share or download JPEG images with Web Share API and download fallback
-  async function shareOrDownloadImages(files, title = 'Tài liệu quét') {
-    if (typeof navigator !== 'undefined' && navigator.canShare) {
-      try {
-        if (navigator.canShare({ files })) {
-          await navigator.share({
-            files,
-            title,
-          })
-          return true
-        }
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          return false
-        }
-        console.warn('Web Share failed, falling back to download:', err)
-      }
-    }
-
-    // Fallback: download each file
-    for (let i = 0; i < files.length; i++) {
-      download(files[i], files[i].name)
-      if (files.length > 1) {
-        await new Promise(resolve => setTimeout(resolve, 250))
-      }
-    }
-    return true
-  }
-
   // Quick export for a single page
   async function exportSinglePage(blob, fileName) {
     if (processingRef.current) return
@@ -836,10 +798,21 @@ export default function App() {
     </div>
   ) : null
 
+  /* ───────── Toast overlay (rendered on top of any screen) ───────── */
+  const ToastOverlay = toast ? (
+    <div className="pointer-events-none fixed inset-x-4 bottom-36 z-50 flex justify-center animate-in fade-in slide-in-from-bottom-3 duration-200">
+      <div className="flex items-center gap-2 rounded-full glass-panel px-5 py-2.5 text-sm font-bold text-emerald-400 shadow-2xl border border-emerald-400/30">
+        <Check className="h-4 w-4 stroke-[3]" />
+        <span>{toast}</span>
+      </div>
+    </div>
+  ) : null
+
   /* ───────── Capture Confirmation Screen ───────── */
   if (screen === 'confirm') return (
     <>
       {LightboxOverlay}
+      {ToastOverlay}
       <main className="safe flex min-h-full flex-col justify-between bg-slate-950 p-5">
         <Header back={retakePage} title="Xem lại trang" />
 
@@ -883,7 +856,9 @@ export default function App() {
 
   /* ───────── Gallery Screen ───────── */
   if (screen === 'gallery') return (
-    <main className="safe min-h-full bg-slate-950 p-5 flex flex-col">
+    <>
+      {ToastOverlay}
+      <main className="safe min-h-full bg-slate-950 p-5 flex flex-col">
       <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện tài liệu" />
       {gallery.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center rounded-3xl border border-white/10 bg-slate-900/40 p-10 text-center backdrop-blur-xl">
@@ -936,6 +911,7 @@ export default function App() {
         </div>
       )}
     </main>
+    </>
   )
 
   /* ───────── Gallery View Screen (read-only record viewer) ───────── */
@@ -944,6 +920,7 @@ export default function App() {
     return (
       <>
         {LightboxOverlay}
+        {ToastOverlay}
         <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
           <div>
             <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
@@ -1011,6 +988,7 @@ export default function App() {
   if (screen === 'cart') return (
     <>
       {LightboxOverlay}
+      {ToastOverlay}
       <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
         <div>
           <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
@@ -1131,7 +1109,9 @@ export default function App() {
 
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
-    <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
+    <>
+      {ToastOverlay}
+      <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
       <div>
         <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
         <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
@@ -1167,11 +1147,14 @@ export default function App() {
         <span>Áp dụng 4 góc &amp; Cắt</span>
       </button>
     </main>
+    </>
   )
 
   /* ───────── Camera Screen (default) ───────── */
   return (
-    <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
+    <>
+      {ToastOverlay}
+      <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
       <header className="px-4 pt-1 pb-2">
         <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
           <div className="flex items-center gap-2.5">
@@ -1236,15 +1219,6 @@ export default function App() {
             </button>
           </div>
         )}
-
-        {toast && (
-          <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center animate-in fade-in slide-in-from-bottom-3 duration-200">
-            <div className="flex items-center gap-2 rounded-full glass-panel px-5 py-2.5 text-sm font-bold text-emerald-400 shadow-2xl border border-emerald-400/30">
-              <Check className="h-4 w-4 stroke-[3]" />
-              <span>{toast}</span>
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="px-4 pt-2 pb-4 text-center">
@@ -1265,6 +1239,7 @@ export default function App() {
 
       </div>
     </main>
+    </>
   )
 }
 

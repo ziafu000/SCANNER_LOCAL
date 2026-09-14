@@ -7,11 +7,12 @@
   - `public/`: Assets, OpenCV, icons, manifest/PWA icons.
   - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Confirm/Adjust -> Cart -> Gallery/View.
   - `db.js`: IndexedDB wrapper for local gallery.
+  - `export.js`: Web Share API (`navigator.share`) export helper for JPEG images (Apple Photos) with download fallback and file download helper.
 - **Workflow:**
   - Camera preview uses camera stream -> `requestAnimationFrame` -> direct canvas rendering and OpenCV corner detection -> polygon drawing on the same canvas.
   - Capture -> canvas-based OpenCV corner detection and perspective warp -> Filter (custom image processing) -> user confirmation -> Cart.
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
-  - Multi-page -> `jspdf` generates blobs locally.
+  - Multi-page / Export -> `jspdf` generates PDF blobs locally; `export.js` handles JPEG image sharing to Apple Photos via Web Share API or individual page downloads.
 - **PWA/Deployment:**
   - `vite-plugin-pwa` generates an auto-updating service worker that precaches the app shell but excludes the large local `opencv.js` binary.
   - HTTPS requirement: Essential for `getUserMedia`.
