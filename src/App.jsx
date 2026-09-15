@@ -27,6 +27,8 @@ import { listScans, putScan, removeScan } from './db'
 import { download, shareOrDownloadImages } from './export'
 import { orderPoints, isReasonableQuad, recoverFoldedCorners, polygonArea } from './geometry'
 import { FILTER_PRESETS, applyFilter, applyFilterAsync, generateFilterThumbnails } from './filters'
+import { extractClientCoords, calculateClampedPoint, updateCornerPoint, getSvgPolygonPoints } from './adjust-helper'
+import ErrorBoundary from './ErrorBoundary'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = async (canvas) => {
@@ -298,32 +300,45 @@ function findOptimalCorners(canvas) {
 }
 
 function customExtract(srcCanvas, pts) {
+  if (!window.cv) throw new Error('OpenCV chưa sẵn sàng')
   const cv = window.cv
   const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
   const w = Math.round(Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2])))
   const h = Math.round(Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2])))
-  
-  const src = cv.imread(srcCanvas)
-  const dst = new cv.Mat()
-  const dsize = new cv.Size(w, h)
-  
-  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    pts[0].x, pts[0].y, pts[1].x, pts[1].y,
-    pts[2].x, pts[2].y, pts[3].x, pts[3].y
-  ])
-  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    0, 0, w, 0, w, h, 0, h
-  ])
-  
-  const M = cv.getPerspectiveTransform(srcTri, dstTri)
-  cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar())
-  
-  const out = document.createElement('canvas')
-  out.width = w; out.height = h
-  cv.imshow(out, dst)
-  
-  src.delete(); dst.delete(); srcTri.delete(); dstTri.delete(); M.delete()
-  return out
+
+  if (w <= 0 || h <= 0 || !Number.isFinite(w) || !Number.isFinite(h)) {
+    throw new Error('Kích thước cắt không hợp lệ')
+  }
+
+  let src = null, dst = null, srcTri = null, dstTri = null, M = null
+  try {
+    src = cv.imread(srcCanvas)
+    dst = new cv.Mat()
+    const dsize = new cv.Size(w, h)
+
+    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      pts[0].x, pts[0].y, pts[1].x, pts[1].y,
+      pts[2].x, pts[2].y, pts[3].x, pts[3].y
+    ])
+    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      0, 0, w, 0, w, h, 0, h
+    ])
+
+    M = cv.getPerspectiveTransform(srcTri, dstTri)
+    cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar())
+
+    const out = document.createElement('canvas')
+    out.width = w
+    out.height = h
+    cv.imshow(out, dst)
+    return out
+  } finally {
+    if (src) src.delete()
+    if (dst) dst.delete()
+    if (srcTri) srcTri.delete()
+    if (dstTri) dstTri.delete()
+    if (M) M.delete()
+  }
 }
 
 export default function App() {
@@ -1376,25 +1391,32 @@ export default function App() {
 
   /* ───────── Adjust Screen ───────── */
   if (screen === 'adjust') return (
-    <>
+    <ErrorBoundary onReset={cancelAdjust} onNavigateCamera={cancelAdjust}>
       {ToastOverlay}
       <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
-      <div>
-        <Header disabled={processing} back={cancelAdjust} title="Chỉnh 4 góc" />
-        <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
-        {error && <p className="mt-3 rounded-2xl bg-red-950/80 border border-red-500/30 p-3 text-sm text-red-200">{error}</p>}
-      </div>
+        <div>
+          <Header disabled={processing} back={cancelAdjust} title="Chỉnh 4 góc" />
+          {draft?.raw && (
+            <Adjust
+              key={draft.raw}
+              image={draft.raw}
+              points={draft.points}
+              setPoints={p => setDraft(d => (d ? { ...d, points: typeof p === 'function' ? p(d.points) : p } : null))}
+            />
+          )}
+          {error && <p className="mt-3 rounded-2xl bg-red-950/80 border border-red-500/30 p-3 text-sm text-red-200">{error}</p>}
+        </div>
 
-      <button
-        disabled={processing}
-        className="tap mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
-        onClick={applyManual}
-      >
-        <Check className="h-5 w-5 stroke-[2.5]" />
-        <span>Áp dụng 4 góc &amp; Cắt</span>
-      </button>
-    </main>
-    </>
+        <button
+          disabled={processing}
+          className="tap mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+          onClick={applyManual}
+        >
+          <Check className="h-5 w-5 stroke-[2.5]" />
+          <span>Áp dụng 4 góc &amp; Cắt</span>
+        </button>
+      </main>
+    </ErrorBoundary>
   )
 
   /* ───────── Camera Screen (default) ───────── */
@@ -1507,47 +1529,181 @@ function Header({ back, title, disabled = false }) {
 }
 
 function Adjust({ image, points, setPoints }) {
-  const ref = useRef()
-  const dragIdx = useRef(null)
+  const containerRef = useRef(null)
+  const dragIdxRef = useRef(null)
+  const activePointerIdRef = useRef(null)
+  const [activeCorner, setActiveCorner] = useState(null)
   const [imageSize, setImageSize] = useState(null)
 
-  const update = e => {
-    if (dragIdx.current === null) return
-    const r = ref.current.getBoundingClientRect()
-    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
-    const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))
-    setPoints(p => p.map((v, i) => i === dragIdx.current
-      ? { x: x * imageSize.width, y: y * imageSize.height }
-      : v
-    ))
+  const handleStart = (index, e) => {
+    try {
+      e.preventDefault?.()
+      e.stopPropagation?.()
+      dragIdxRef.current = index
+      setActiveCorner(index)
+      if (e.pointerId != null) {
+        activePointerIdRef.current = e.pointerId
+        if (e.currentTarget?.setPointerCapture) {
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId)
+          } catch {
+            // Some iOS WebKit versions throw InvalidPointerId
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Pointer start error:', err)
+    }
   }
 
+  const handleMove = (e) => {
+    if (dragIdxRef.current === null) return
+    try {
+      e.preventDefault?.()
+      const coords = extractClientCoords(e)
+      if (!coords || !containerRef.current || !imageSize) return
+      const rect = containerRef.current.getBoundingClientRect()
+      const newPt = calculateClampedPoint(coords, rect, imageSize)
+      if (!newPt) return
+
+      setPoints(prev => updateCornerPoint(prev, dragIdxRef.current, newPt))
+    } catch (err) {
+      console.warn('Pointer move error:', err)
+    }
+  }
+
+  const handleEnd = (e) => {
+    try {
+      if (activePointerIdRef.current != null && e?.currentTarget?.releasePointerCapture) {
+        try {
+          e.currentTarget.releasePointerCapture(activePointerIdRef.current)
+        } catch {
+          // Ignore
+        }
+      }
+    } catch {}
+    dragIdxRef.current = null
+    activePointerIdRef.current = null
+    setActiveCorner(null)
+  }
+
+  useEffect(() => {
+    const onGlobalMove = (e) => {
+      if (dragIdxRef.current !== null) {
+        handleMove(e)
+      }
+    }
+    const onGlobalEnd = (e) => {
+      if (dragIdxRef.current !== null) {
+        handleEnd(e)
+      }
+    }
+
+    window.addEventListener('pointermove', onGlobalMove, { passive: false })
+    window.addEventListener('pointerup', onGlobalEnd)
+    window.addEventListener('pointercancel', onGlobalEnd)
+    window.addEventListener('touchmove', onGlobalMove, { passive: false })
+    window.addEventListener('touchend', onGlobalEnd)
+    window.addEventListener('touchcancel', onGlobalEnd)
+
+    return () => {
+      window.removeEventListener('pointermove', onGlobalMove)
+      window.removeEventListener('pointerup', onGlobalEnd)
+      window.removeEventListener('pointercancel', onGlobalEnd)
+      window.removeEventListener('touchmove', onGlobalMove)
+      window.removeEventListener('touchend', onGlobalEnd)
+      window.removeEventListener('touchcancel', onGlobalEnd)
+    }
+  }, [imageSize])
+
+  const svgPoints = imageSize ? getSvgPolygonPoints(points, imageSize) : ''
+  const strokeW = imageSize ? Math.max(3, Math.round(Math.min(imageSize.width, imageSize.height) * 0.005)) : 3
+
   return (
-    <div className="mx-auto max-h-[62vh] w-fit rounded-2xl overflow-hidden glass-panel p-2 shadow-2xl">
+    <div className="mx-auto max-h-[62vh] w-fit rounded-2xl overflow-hidden glass-panel p-2 shadow-2xl select-none touch-none">
       <div
-        ref={ref}
-        onPointerMove={update}
-        onPointerUp={() => dragIdx.current = null}
-        className="relative w-fit"
+        ref={containerRef}
+        onPointerMove={handleMove}
+        onPointerUp={handleEnd}
+        onPointerCancel={handleEnd}
+        onTouchMove={handleMove}
+        onTouchEnd={handleEnd}
+        onTouchCancel={handleEnd}
+        className="relative w-fit select-none touch-none"
+        style={{
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none'
+        }}
       >
         <img
           src={image}
           onLoad={e => setImageSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
-          className="block max-h-[60vh] max-w-full rounded-xl object-contain"
+          className="block max-h-[60vh] max-w-full rounded-xl object-contain select-none pointer-events-none touch-none"
+          style={{
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none'
+          }}
           alt="Ảnh gốc"
         />
-        {imageSize && points.map((p, i) => (
-          <button
-            key={i}
-            onPointerDown={e => { dragIdx.current = i; e.currentTarget.setPointerCapture(e.pointerId) }}
-            aria-label={`Góc ${i + 1}`}
-            className="corner absolute h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white bg-emerald-400 shadow-xl ring-4 ring-black/30 active:scale-125 transition-transform"
-            style={{
-              left: `${(p.x / imageSize.width) * 100}%`,
-              top: `${(p.y / imageSize.height) * 100}%`,
-            }}
-          />
-        ))}
+
+        {/* Dynamic SVG Polygon Quad Overlay */}
+        {imageSize && svgPoints && (
+          <svg
+            viewBox={`0 0 ${imageSize.width} ${imageSize.height}`}
+            className="absolute inset-0 h-full w-full pointer-events-none z-10"
+            style={{ touchAction: 'none' }}
+          >
+            <polygon
+              points={svgPoints}
+              fill="rgba(16, 185, 129, 0.16)"
+              stroke="#10b981"
+              strokeWidth={strokeW}
+              strokeLinejoin="round"
+              strokeDasharray="10 6"
+            />
+          </svg>
+        )}
+
+        {/* 4 Interactive Corner Handles */}
+        {imageSize && points && points.map((p, i) => {
+          if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null
+          const leftPct = (p.x / imageSize.width) * 100
+          const topPct = (p.y / imageSize.height) * 100
+          const isDragging = activeCorner === i
+
+          return (
+            <button
+              key={i}
+              type="button"
+              onPointerDown={e => handleStart(i, e)}
+              onPointerUp={handleEnd}
+              onPointerCancel={handleEnd}
+              onTouchStart={e => handleStart(i, e)}
+              onTouchEnd={handleEnd}
+              onTouchCancel={handleEnd}
+              aria-label={`Góc ${i + 1}`}
+              className={`corner absolute z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-[3px] border-white shadow-2xl transition-transform duration-75 touch-none select-none ${
+                isDragging
+                  ? 'scale-125 ring-4 ring-emerald-400 bg-emerald-300'
+                  : 'bg-emerald-400 ring-4 ring-black/40 hover:scale-110 active:scale-125'
+              }`}
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                touchAction: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                WebkitTouchCallout: 'none'
+              }}
+            >
+              <span className="h-2 w-2 rounded-full bg-slate-950" />
+            </button>
+          )
+        })}
       </div>
     </div>
   )

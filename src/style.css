@@ -52,6 +52,9 @@ input, textarea, select {
 
 .corner {
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .paper-shadow {
