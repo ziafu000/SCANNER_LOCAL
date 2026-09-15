@@ -336,7 +336,6 @@ export default function App() {
   const [draft, setDraft] = useState(null)
   const [pages, setPages] = useState([])
   const pagesRef = useRef([])
-  const [filter, setFilter] = useState('color')
   const [gallery, setGallery] = useState([])
   const [drag, setDrag] = useState(null)
   // Document name for the current cart session
@@ -370,16 +369,28 @@ export default function App() {
     pagesRef.current = pages
   }, [pages])
 
+  const pendingCaptureRef = useRef(null)
+  useEffect(() => {
+    pendingCaptureRef.current = pendingCapture
+  }, [pendingCapture])
+
+  const draftRef = useRef(null)
+  useEffect(() => {
+    draftRef.current = draft
+  }, [draft])
+
   useEffect(() => () => {
     pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
-  }, [])
-
-  useEffect(() => {
-    const rawUrl = draft?.raw
-    return () => {
-      if (rawUrl) URL.revokeObjectURL(rawUrl)
+    if (pendingCaptureRef.current) {
+      const pc = pendingCaptureRef.current
+      if (pc.rawUrl) URL.revokeObjectURL(pc.rawUrl)
+      if (pc.originalUrl) URL.revokeObjectURL(pc.originalUrl)
+      if (pc.filteredUrl && pc.filteredUrl !== pc.originalUrl) URL.revokeObjectURL(pc.filteredUrl)
     }
-  }, [draft?.raw])
+    if (draftRef.current?.raw && draftRef.current.raw !== pendingCaptureRef.current?.rawUrl) {
+      URL.revokeObjectURL(draftRef.current.raw)
+    }
+  }, [])
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
@@ -536,13 +547,11 @@ export default function App() {
           thumbnails
         })
         setIsComparing(false)
-        setFilter(initialFilter)
         setScreen('confirm')
         setStatus('Xem lại và tinh chỉnh trang')
       } else {
         const defaultPts = fitPoints(c.width, c.height)
         setDraft({ raw: rawUrl, rawCanvas: c, points: defaultPts })
-        setFilter('magic_color')
         setScreen('adjust')
         setStatus('Chỉnh lại 4 góc')
       }
@@ -572,7 +581,6 @@ export default function App() {
           filteredUrl: newUrl
         }
       })
-      setFilter(filterId)
     } finally {
       setFilterApplying(false)
     }
@@ -621,6 +629,9 @@ export default function App() {
   }
 
   function cancelAdjust() {
+    if (!pendingCapture && draft?.raw) {
+      URL.revokeObjectURL(draft.raw)
+    }
     setDraft(null)
     setError('')
     if (pendingCapture) {
@@ -681,7 +692,6 @@ export default function App() {
       })
       setDraft(null)
       setIsComparing(false)
-      setFilter(currentFilter)
       setScreen('confirm')
       setStatus('Xem lại và tinh chỉnh trang')
     } finally {
@@ -733,6 +743,9 @@ export default function App() {
           URL.revokeObjectURL(pendingCapture.filteredUrl)
         }
         setPendingCapture(null)
+      }
+      if (draft?.raw && draft.raw !== pendingCapture?.rawUrl) {
+        URL.revokeObjectURL(draft.raw)
       }
       setDraft(null)
       setScreen('camera')

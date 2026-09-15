@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   FILTER_PRESETS,
+  computeOtsuThreshold,
   filterMagicColor,
   filterShadowRemoval,
   filterBlackAndWhite,
@@ -126,5 +127,14 @@ describe('Document Enhancement Filters', () => {
     filterGrayscale(pixels)
     assert.strictEqual(pixels[0], pixels[1])
     assert.strictEqual(pixels[1], pixels[2])
+  })
+
+  it('computeOtsuThreshold finds optimal separation on bimodal distribution', () => {
+    const gray = new Uint8Array(100)
+    for (let i = 0; i < 50; i++) gray[i] = 40
+    for (let i = 50; i < 100; i++) gray[i] = 220
+
+    const thresh = computeOtsuThreshold(gray)
+    assert.ok(thresh >= 40 && thresh < 220, `Threshold ${thresh} should be between 40 and 220`)
   })
 })

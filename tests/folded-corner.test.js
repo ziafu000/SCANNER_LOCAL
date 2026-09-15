@@ -4,9 +4,21 @@ import {
   isReasonableQuad,
   orderPoints,
   lineIntersection,
-  recoverFoldedCorners,
-  isPointInPolygon
+  recoverFoldedCorners
 } from '../src/geometry.js'
+
+function isPointInPolygon(pt, polygon) {
+  if (!polygon || polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y
+    const xj = polygon[j].x, yj = polygon[j].y
+    const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
+      (pt.x <= (xj - xi) * (pt.y - yi) / (yj - yi + 1e-12) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
 
 describe('Folded corner tracking & recovery', () => {
   it('demonstrates that raw 5-gon without inferred corners cuts into document content', () => {

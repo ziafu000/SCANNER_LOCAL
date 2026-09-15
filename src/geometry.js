@@ -105,26 +105,6 @@ export function polygonArea(pts) {
 }
 
 /**
- * Tests if a point lies inside a polygon using ray casting.
- *
- * @param {{x: number, y: number}} pt
- * @param {Array<{x: number, y: number}>} polygon
- * @returns {boolean}
- */
-export function isPointInPolygon(pt, polygon) {
-  if (!polygon || polygon.length < 3) return false
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i].x, yi = polygon[i].y
-    const xj = polygon[j].x, yj = polygon[j].y
-    const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
-      (pt.x <= (xj - xi) * (pt.y - yi) / (yj - yi + 1e-12) + xi)
-    if (intersect) inside = !inside
-  }
-  return inside
-}
-
-/**
  * Recovers 4 geometric document corners from a polygon that may have folded/cut corners.
  * Uses Line Intersection of the primary boundary edges to recover virtual corners.
  *

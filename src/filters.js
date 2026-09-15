@@ -189,8 +189,48 @@ export function filterShadowRemoval(pixels, width, height) {
   return pixels
 }
 
+export function computeOtsuThreshold(gray) {
+  if (!gray || gray.length === 0) return 128
+  const total = gray.length
+  const hist = new Uint32Array(256)
+  for (let i = 0; i < total; i++) {
+    hist[gray[i]]++
+  }
+
+  let sum = 0
+  for (let t = 0; t < 256; t++) {
+    sum += t * hist[t]
+  }
+
+  let sumB = 0
+  let wB = 0
+  let varMax = -1
+  let threshold = gray[0]
+
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]
+    if (wB === 0) continue
+    const wF = total - wB
+    if (wF === 0) break
+
+    sumB += t * hist[t]
+    const mB = sumB / wB
+    const mF = (sum - sumB) / wF
+
+    const pB = wB / total
+    const pF = wF / total
+    const varBetween = pB * pF * (mB - mF) * (mB - mF)
+    if (varBetween > varMax) {
+      varMax = varBetween
+      threshold = t
+    }
+  }
+
+  return threshold
+}
+
 /**
- * Clean Document B&W filter using Adaptive Thresholding via Integral Image.
+ * Clean Document B&W filter using Adaptive Thresholding combined with Otsu.
  */
 export function filterBlackAndWhite(pixels, width, height) {
   const numPixels = width * height
@@ -200,6 +240,8 @@ export function filterBlackAndWhite(pixels, width, height) {
     const idx = i * 4
     gray[i] = Math.round(0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2])
   }
+
+  const otsuThresh = computeOtsuThreshold(gray)
 
   // Build integral image (Summed Area Table)
   const integral = new Float64Array((width + 1) * (height + 1))
@@ -236,7 +278,9 @@ export function filterBlackAndWhite(pixels, width, height) {
       const localMean = sum / count
 
       const g = gray[y * width + x]
-      const val = g < (localMean - cOffset) ? 0 : 255
+      const localThresh = localMean - cOffset
+      const combinedThresh = 0.7 * localThresh + 0.3 * otsuThresh
+      const val = g < combinedThresh ? 0 : 255
       const idx = rowOffset + x * 4
       pixels[idx] = pixels[idx + 1] = pixels[idx + 2] = val
     }
