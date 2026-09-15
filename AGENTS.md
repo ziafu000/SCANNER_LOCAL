@@ -8,10 +8,11 @@
   - `src/`: Components. `App.jsx` hosts the entire state machine: Camera -> Confirm/Adjust -> Cart -> Gallery/View.
   - `db.js`: IndexedDB wrapper for local gallery.
   - `export.js`: Web Share API (`navigator.share`) export helper for JPEG images (Apple Photos) with download fallback and file download helper.
-  - `geometry.js`: Geometric quad validation (`isReasonableQuad`) and corner ordering (`orderPoints`).
+  - `filters.js`: Document enhancement filters (original, magic_color, lighten, shadow_removal, bw, grayscale) with thumbnail generation.
+  - `geometry.js`: Geometric quad validation (`isReasonableQuad`), corner ordering (`orderPoints`), line intersection (`lineIntersection`), and folded corner recovery (`recoverFoldedCorners`).
 - **Workflow:**
-  - Camera preview uses camera stream -> `requestAnimationFrame` -> direct canvas rendering and OpenCV corner detection (7x7 blur, two-pass Canny, multi-epsilon convex hull, hand occlusion correction, geometric quad validation) -> polygon drawing on the same canvas.
-  - Capture -> canvas-based OpenCV corner detection and perspective warp -> Filter (custom image processing) -> user confirmation -> Cart.
+  - Camera preview uses camera stream -> `requestAnimationFrame` -> direct canvas rendering and OpenCV corner detection (7x7 blur, two-pass Canny, multi-epsilon convex hull, folded corner line intersection recovery, hand occlusion correction, geometric quad validation) -> polygon drawing on the same canvas.
+  - Capture -> canvas-based OpenCV corner detection (with virtual corner recovery) and perspective warp -> CamScanner preview with real-time filter switcher, press-and-hold compare, 90° rotation, and re-crop -> user confirmation -> Cart.
   - Gallery -> Browser IndexedDB storage (not persistent across cache clears).
   - Multi-page / Export -> `jspdf` generates PDF blobs locally; `export.js` handles JPEG image sharing to Apple Photos via Web Share API or individual page downloads.
 - **PWA/Deployment:**

@@ -7,6 +7,9 @@ import {
   FileText,
   ChevronLeft,
   RotateCcw,
+  RotateCw,
+  Crop,
+  Eye,
   Check,
   Trash2,
   ArrowUp,
@@ -22,33 +25,32 @@ import {
 } from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
 import { download, shareOrDownloadImages } from './export'
-import { orderPoints, isReasonableQuad } from './geometry'
+import { orderPoints, isReasonableQuad, recoverFoldedCorners, polygonArea } from './geometry'
+import { FILTER_PRESETS, applyFilter, applyFilterAsync, generateFilterThumbnails } from './filters'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
-const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+const blobFrom = async (canvas) => {
+  if (canvas.convertToBlob) {
+    return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+  }
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+}
 const urlOf = blob => URL.createObjectURL(blob)
 const label = (time) => new Date(time).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 const defaultDocName = () => `Tài liệu ${label(Date.now())}`
 
-function canvasFilter(source, kind) {
-  const c = document.createElement('canvas'), ctx = c.getContext('2d')
-  c.width = source.width; c.height = source.height; ctx.drawImage(source, 0, 0)
-  const d = ctx.getImageData(0, 0, c.width, c.height), p = d.data
-  for (let i = 0; i < p.length; i += 4) {
-    const v = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2]
-    if (kind === 'bw') {
-      const bw = v > 165 ? 255 : 0
-      p[i] = p[i + 1] = p[i + 2] = bw
-    } else if (kind === 'gray') {
-      p[i] = p[i + 1] = p[i + 2] = v
-    } else {
-      // Color: lighten paper, boost contrast slightly
-      p[i] = Math.min(255, p[i] * 1.08 + 10)
-      p[i + 1] = Math.min(255, p[i + 1] * 1.08 + 10)
-      p[i + 2] = Math.min(255, p[i + 2] * 1.03 + 6)
-    }
-  }
-  ctx.putImageData(d, 0, 0)
+function rotateCanvas(source, degrees = 90) {
+  const rad = (degrees * Math.PI) / 180
+  const is90or270 = degrees % 180 !== 0
+  const w = is90or270 ? source.height : source.width
+  const h = is90or270 ? source.width : source.height
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const ctx = c.getContext('2d')
+  ctx.translate(w / 2, h / 2)
+  ctx.rotate(rad)
+  ctx.drawImage(source, -source.width / 2, -source.height / 2)
   return c
 }
 
@@ -165,36 +167,49 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) 
               break
             }
           }
-        } else if (approx.rows === 5 && cv.isContourConvex(approx)) {
-          // Hand occlusion handling: finger holding edge creates a 5th vertex.
-          // Find vertex with angle closest to 180 deg (flattest vertex along paper edge)
-          const pts5 = []
-          for (let j = 0; j < 5; j++) {
-            pts5.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+        } else if ((approx.rows === 5 || approx.rows === 6) && cv.isContourConvex(approx)) {
+          const pts = []
+          for (let j = 0; j < approx.rows; j++) {
+            pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
           }
-          let bestIdx = -1
-          let minCos = 0
-          for (let j = 0; j < 5; j++) {
-            const pPrev = pts5[(j + 4) % 5]
-            const pCurr = pts5[j]
-            const pNext = pts5[(j + 1) % 5]
-            const v1x = pPrev.x - pCurr.x, v1y = pPrev.y - pCurr.y
-            const v2x = pNext.x - pCurr.x, v2y = pNext.y - pCurr.y
-            const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y)
-            if (l1 > 1e-6 && l2 > 1e-6) {
-              const cosA = (v1x * v2x + v1y * v2y) / (l1 * l2)
-              if (cosA < -0.65 && cosA < minCos) {
-                minCos = cosA
-                bestIdx = j
-              }
+
+          // Folded corner recovery via Line Intersection of primary boundary edges
+          const recovered = recoverFoldedCorners(pts)
+          if (recovered && isReasonableQuad(recovered)) {
+            const recArea = polygonArea(recovered)
+            if (recArea >= minArea) {
+              detectedQuad = recovered
+              break
             }
           }
-          if (bestIdx !== -1) {
-            const pts4 = pts5.filter((_, idx) => idx !== bestIdx)
-            const ordered = orderPoints(pts4)
-            if (isReasonableQuad(ordered)) {
-              detectedQuad = ordered
-              break
+
+          // Hand occlusion handling fallback if recoverFoldedCorners didn't trigger:
+          // finger holding edge creates a 5th vertex along paper edge
+          if (approx.rows === 5) {
+            let bestIdx = -1
+            let minCos = 0
+            for (let j = 0; j < 5; j++) {
+              const pPrev = pts[(j + 4) % 5]
+              const pCurr = pts[j]
+              const pNext = pts[(j + 1) % 5]
+              const v1x = pPrev.x - pCurr.x, v1y = pPrev.y - pCurr.y
+              const v2x = pNext.x - pCurr.x, v2y = pNext.y - pCurr.y
+              const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y)
+              if (l1 > 1e-6 && l2 > 1e-6) {
+                const cosA = (v1x * v2x + v1y * v2y) / (l1 * l2)
+                if (cosA < -0.65 && cosA < minCos) {
+                  minCos = cosA
+                  bestIdx = j
+                }
+              }
+            }
+            if (bestIdx !== -1) {
+              const pts4 = pts.filter((_, idx) => idx !== bestIdx)
+              const ordered = orderPoints(pts4)
+              if (isReasonableQuad(ordered)) {
+                detectedQuad = ordered
+                break
+              }
             }
           }
         }
@@ -321,7 +336,6 @@ export default function App() {
   const [draft, setDraft] = useState(null)
   const [pages, setPages] = useState([])
   const pagesRef = useRef([])
-  const [filter, setFilter] = useState('color')
   const [gallery, setGallery] = useState([])
   const [drag, setDrag] = useState(null)
   // Document name for the current cart session
@@ -334,8 +348,10 @@ export default function App() {
   const [processing, setProcessing] = useState(false)
   const processingRef = useRef(false)
   const [viewedPages, setViewedPages] = useState([])
-  // Capture confirmation: pending page waiting for user to confirm/retake
-  const [pendingPage, setPendingPage] = useState(null) // { id, blob, url }
+  // Capture confirmation: pending page with raw and processed assets
+  const [pendingCapture, setPendingCapture] = useState(null)
+  const [isComparing, setIsComparing] = useState(false)
+  const [filterApplying, setFilterApplying] = useState(false)
   // Fullscreen lightbox: URL of image to show, or null
   const [lightbox, setLightbox] = useState(null)
 
@@ -353,16 +369,28 @@ export default function App() {
     pagesRef.current = pages
   }, [pages])
 
+  const pendingCaptureRef = useRef(null)
+  useEffect(() => {
+    pendingCaptureRef.current = pendingCapture
+  }, [pendingCapture])
+
+  const draftRef = useRef(null)
+  useEffect(() => {
+    draftRef.current = draft
+  }, [draft])
+
   useEffect(() => () => {
     pagesRef.current.forEach(page => URL.revokeObjectURL(page.url))
-  }, [])
-
-  useEffect(() => {
-    const rawUrl = draft?.raw
-    return () => {
-      if (rawUrl) URL.revokeObjectURL(rawUrl)
+    if (pendingCaptureRef.current) {
+      const pc = pendingCaptureRef.current
+      if (pc.rawUrl) URL.revokeObjectURL(pc.rawUrl)
+      if (pc.originalUrl) URL.revokeObjectURL(pc.originalUrl)
+      if (pc.filteredUrl && pc.filteredUrl !== pc.originalUrl) URL.revokeObjectURL(pc.filteredUrl)
     }
-  }, [draft?.raw])
+    if (draftRef.current?.raw && draftRef.current.raw !== pendingCaptureRef.current?.rawUrl) {
+      URL.revokeObjectURL(draftRef.current.raw)
+    }
+  }, [])
 
   const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
@@ -492,17 +520,38 @@ export default function App() {
         detectionGood = false
       }
 
-      if (detectionGood) {
-        const filteredBlob = await blobFrom(canvasFilter(out, 'color'))
-        const newPage = { id: uid(), blob: filteredBlob, url: urlOf(filteredBlob) }
-        setPendingPage(newPage)
-        setFilter('color')
+      const rawBlob = await blobFrom(c)
+      const rawUrl = urlOf(rawBlob)
+
+      if (detectionGood && out) {
+        setStatus('Đang xử lý bộ lọc…')
+        const originalBlob = await blobFrom(out)
+        const originalUrl = urlOf(originalBlob)
+        const thumbnails = generateFilterThumbnails(out)
+
+        // Preset default: Tăng cường (magic_color)
+        const initialFilter = 'magic_color'
+        const filteredCanvas = await applyFilterAsync(out, initialFilter)
+        const filteredBlob = await blobFrom(filteredCanvas)
+        const filteredUrl = urlOf(filteredBlob)
+
+        setPendingCapture({
+          rawCanvas: c,
+          rawUrl,
+          points,
+          warpedCanvas: out,
+          originalUrl,
+          filteredUrl,
+          filteredBlob,
+          filter: initialFilter,
+          thumbnails
+        })
+        setIsComparing(false)
         setScreen('confirm')
-        setStatus('Xem lại và xác nhận trang')
+        setStatus('Xem lại và tinh chỉnh trang')
       } else {
-        const rawBlob = await blobFrom(c)
-        setDraft({ raw: urlOf(rawBlob), points: fitPoints(c.width, c.height) })
-        setFilter('color')
+        const defaultPts = fitPoints(c.width, c.height)
+        setDraft({ raw: rawUrl, rawCanvas: c, points: defaultPts })
         setScreen('adjust')
         setStatus('Chỉnh lại 4 góc')
       }
@@ -512,15 +561,102 @@ export default function App() {
     }
   }
 
+  async function selectFilter(filterId) {
+    if (!pendingCapture || pendingCapture.filter === filterId || filterApplying) return
+    setFilterApplying(true)
+    try {
+      const filteredCanvas = await applyFilterAsync(pendingCapture.warpedCanvas, filterId)
+      const newBlob = await blobFrom(filteredCanvas)
+      const newUrl = urlOf(newBlob)
+
+      setPendingCapture(prev => {
+        if (!prev) return null
+        if (prev.filteredUrl && prev.filteredUrl !== prev.originalUrl) {
+          URL.revokeObjectURL(prev.filteredUrl)
+        }
+        return {
+          ...prev,
+          filter: filterId,
+          filteredBlob: newBlob,
+          filteredUrl: newUrl
+        }
+      })
+    } finally {
+      setFilterApplying(false)
+    }
+  }
+
+  async function handleRotate90() {
+    if (!pendingCapture || filterApplying || processingRef.current) return
+    setFilterApplying(true)
+    try {
+      const rotated = rotateCanvas(pendingCapture.warpedCanvas, 90)
+      const newOriginalBlob = await blobFrom(rotated)
+      const newOriginalUrl = urlOf(newOriginalBlob)
+      const thumbnails = generateFilterThumbnails(rotated)
+
+      const filteredCanvas = await applyFilterAsync(rotated, pendingCapture.filter)
+      const newFilteredBlob = await blobFrom(filteredCanvas)
+      const newFilteredUrl = urlOf(newFilteredBlob)
+
+      if (pendingCapture.originalUrl) URL.revokeObjectURL(pendingCapture.originalUrl)
+      if (pendingCapture.filteredUrl && pendingCapture.filteredUrl !== pendingCapture.originalUrl) {
+        URL.revokeObjectURL(pendingCapture.filteredUrl)
+      }
+
+      setPendingCapture(prev => ({
+        ...prev,
+        warpedCanvas: rotated,
+        originalUrl: newOriginalUrl,
+        filteredUrl: newFilteredUrl,
+        filteredBlob: newFilteredBlob,
+        thumbnails
+      }))
+    } finally {
+      setFilterApplying(false)
+    }
+  }
+
+  function handleReCrop() {
+    if (!pendingCapture) return
+    setDraft({
+      raw: pendingCapture.rawUrl,
+      rawCanvas: pendingCapture.rawCanvas,
+      points: pendingCapture.points
+    })
+    setScreen('adjust')
+    setStatus('Chỉnh lại 4 góc')
+  }
+
+  function cancelAdjust() {
+    if (!pendingCapture && draft?.raw) {
+      URL.revokeObjectURL(draft.raw)
+    }
+    setDraft(null)
+    setError('')
+    if (pendingCapture) {
+      setScreen('confirm')
+      setStatus('Xem lại và tinh chỉnh trang')
+    } else {
+      setScreen('camera')
+      startCamera()
+    }
+  }
+
   async function applyManual() {
-    if (processingRef.current) return
+    if (processingRef.current || !draft) return
     processingRef.current = true
     setProcessing(true)
     try {
       setError('')
-      const img = await loadImage(draft.raw)
-      const c = document.createElement('canvas')
-      c.width = img.width; c.height = img.height; c.getContext('2d').drawImage(img, 0, 0)
+      const c = draft.rawCanvas || await (async () => {
+        const img = await loadImage(draft.raw)
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width; canvas.height = img.height
+        canvas.getContext('2d').drawImage(img, 0, 0)
+        return canvas
+      })()
+
       let out
       try {
         out = customExtract(c, draft.points)
@@ -529,19 +665,35 @@ export default function App() {
         return
       }
 
-      const filtered = canvasFilter(out, filter)
-      const filteredBlob = await blobFrom(filtered)
+      const originalBlob = await blobFrom(out)
+      const originalUrl = urlOf(originalBlob)
+      const thumbnails = generateFilterThumbnails(out)
 
-      const newPage = {
-        id: uid(),
-        blob: filteredBlob,
-        url: urlOf(filteredBlob),
+      const currentFilter = pendingCapture?.filter || 'magic_color'
+      const filteredCanvas = await applyFilterAsync(out, currentFilter)
+      const filteredBlob = await blobFrom(filteredCanvas)
+      const filteredUrl = urlOf(filteredBlob)
+
+      if (pendingCapture?.originalUrl) URL.revokeObjectURL(pendingCapture.originalUrl)
+      if (pendingCapture?.filteredUrl && pendingCapture.filteredUrl !== pendingCapture.originalUrl) {
+        URL.revokeObjectURL(pendingCapture.filteredUrl)
       }
 
+      setPendingCapture({
+        rawCanvas: c,
+        rawUrl: draft.raw,
+        points: draft.points,
+        warpedCanvas: out,
+        originalUrl,
+        filteredUrl,
+        filteredBlob,
+        filter: currentFilter,
+        thumbnails
+      })
       setDraft(null)
-      setPendingPage(newPage)
+      setIsComparing(false)
       setScreen('confirm')
-      setStatus('Xem lại và xác nhận trang')
+      setStatus('Xem lại và tinh chỉnh trang')
     } finally {
       processingRef.current = false
       setProcessing(false)
@@ -549,17 +701,26 @@ export default function App() {
   }
 
   async function confirmPage() {
-    if (processingRef.current || !pendingPage) return
+    if (processingRef.current || !pendingCapture) return
     processingRef.current = true
     setProcessing(true)
-    const page = pendingPage
     try {
+      const page = {
+        id: uid(),
+        blob: pendingCapture.filteredBlob,
+        url: pendingCapture.filteredUrl
+      }
+      if (pendingCapture.rawUrl) URL.revokeObjectURL(pendingCapture.rawUrl)
+      if (pendingCapture.originalUrl && pendingCapture.originalUrl !== pendingCapture.filteredUrl) {
+        URL.revokeObjectURL(pendingCapture.originalUrl)
+      }
+
+      setPendingCapture(null)
       setPages(p => {
         const updated = [...p, page]
         showToast(`Đã thêm trang ${updated.length}`)
         return updated
       })
-      setPendingPage(null)
       setScreen('camera')
       setStatus('Đưa tờ giấy vào khung xanh')
       await new Promise(resolve => setTimeout(resolve, 100))
@@ -574,12 +735,19 @@ export default function App() {
     if (processingRef.current) return
     processingRef.current = true
     setProcessing(true)
-    const page = pendingPage
     try {
-      if (page) {
-        URL.revokeObjectURL(page.url)
-        setPendingPage(null)
+      if (pendingCapture) {
+        if (pendingCapture.rawUrl) URL.revokeObjectURL(pendingCapture.rawUrl)
+        if (pendingCapture.originalUrl) URL.revokeObjectURL(pendingCapture.originalUrl)
+        if (pendingCapture.filteredUrl && pendingCapture.filteredUrl !== pendingCapture.originalUrl) {
+          URL.revokeObjectURL(pendingCapture.filteredUrl)
+        }
+        setPendingCapture(null)
       }
+      if (draft?.raw && draft.raw !== pendingCapture?.rawUrl) {
+        URL.revokeObjectURL(draft.raw)
+      }
+      setDraft(null)
       setScreen('camera')
       setStatus('Đưa tờ giấy vào khung xanh')
       await new Promise(resolve => setTimeout(resolve, 100))
@@ -813,51 +981,145 @@ export default function App() {
     </div>
   ) : null
 
-  /* ───────── Capture Confirmation Screen ───────── */
-  if (screen === 'confirm') return (
-    <>
-      {LightboxOverlay}
-      {ToastOverlay}
-      <main className="safe flex min-h-full flex-col justify-between bg-slate-950 p-5">
-        <Header back={retakePage} title="Xem lại trang" />
+  /* ───────── Capture Confirmation & CamScanner Preview Screen ───────── */
+  if (screen === 'confirm') {
+    const currentImgUrl = isComparing ? pendingCapture?.originalUrl : pendingCapture?.filteredUrl
 
-        <div className="flex flex-1 flex-col items-center justify-center my-2">
-          {pendingPage && (
-            <div className="relative group cursor-zoom-in" onClick={() => setLightbox(pendingPage.url)}>
-              <img
-                src={pendingPage.url}
-                className="max-h-[58vh] max-w-[88vw] rounded-2xl object-contain paper-shadow transition-transform active:scale-[0.99]"
-                alt="Trang đã quét"
-              />
-              <div className="absolute bottom-3 right-3 rounded-full glass-pill px-3 py-1.5 text-xs font-medium text-white/80 shadow-md backdrop-blur-md pointer-events-none">
-                Chạm để phóng to
+    return (
+      <>
+        {LightboxOverlay}
+        {ToastOverlay}
+        <main className="safe flex min-h-full flex-col justify-between bg-slate-950 p-4">
+          <Header back={retakePage} title="Xem lại & Tinh chỉnh" />
+
+          {/* Main Preview Area with Press & Hold to Compare */}
+          <div className="relative flex flex-1 flex-col items-center justify-center my-1 overflow-hidden">
+            {pendingCapture && (
+              <div className="relative group max-h-[50vh] flex items-center justify-center">
+                <img
+                  src={currentImgUrl}
+                  onClick={() => setLightbox(currentImgUrl)}
+                  className="max-h-[50vh] max-w-[88vw] rounded-2xl object-contain paper-shadow transition-all active:scale-[0.99] cursor-zoom-in ring-1 ring-white/10"
+                  alt="Trang đã quét"
+                />
+
+                {/* Floating "Press & Hold to Compare" Button */}
+                <button
+                  type="button"
+                  onPointerDown={(e) => { e.preventDefault(); setIsComparing(true) }}
+                  onPointerUp={() => setIsComparing(false)}
+                  onPointerLeave={() => setIsComparing(false)}
+                  onPointerCancel={() => setIsComparing(false)}
+                  className={`tap absolute top-3 right-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold backdrop-blur-md shadow-xl select-none transition-all ${
+                    isComparing
+                      ? 'bg-amber-400 text-slate-950 scale-105 ring-2 ring-amber-300'
+                      : 'glass-pill text-white/90 hover:bg-white/20 active:scale-95'
+                  }`}
+                  aria-label="So sánh với ảnh gốc"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  <span>{isComparing ? 'Ảnh gốc' : 'Giữ: So sánh'}</span>
+                </button>
+
+                {/* Indicator badge when comparing */}
+                {isComparing && (
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 rounded-full bg-black/80 px-3 py-1 text-xs font-semibold text-amber-300 shadow backdrop-blur-md animate-in fade-in">
+                    Đang xem ảnh gốc
+                  </div>
+                )}
+
+                {/* Loading indicator when filter recalculating */}
+                {filterApplying && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-black/40 backdrop-blur-[2px]">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-          <p className="mt-4 text-sm font-medium text-slate-400">Trang quét thành công. Xác nhận để thêm vào giỏ.</p>
-        </div>
+            )}
+          </div>
 
-        <div className="flex w-full gap-3 pt-2">
-          <button
-            disabled={processing}
-            className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl glass-panel py-4 text-lg font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
-            onClick={retakePage}
-          >
-            <RotateCcw className="h-5 w-5" />
-            <span>Chụp lại</span>
-          </button>
-          <button
-            disabled={processing}
-            className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-4 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
-            onClick={confirmPage}
-          >
-            <Check className="h-5 w-5 stroke-[2.5]" />
-            <span>Xác nhận thêm</span>
-          </button>
-        </div>
-      </main>
-    </>
-  )
+          {/* Horizontal Filter Bar */}
+          <div className="w-full my-2">
+            <div className="flex items-center gap-3 overflow-x-auto pb-2 pt-1 px-1 no-scrollbar">
+              {FILTER_PRESETS.map((preset) => {
+                const isActive = pendingCapture?.filter === preset.id
+                const thumb = pendingCapture?.thumbnails?.[preset.id]
+
+                return (
+                  <button
+                    key={preset.id}
+                    disabled={filterApplying || processing}
+                    onClick={() => selectFilter(preset.id)}
+                    className={`flex flex-col items-center flex-shrink-0 transition-all rounded-xl p-1 active:scale-95 ${
+                      isActive
+                        ? 'ring-2 ring-emerald-400 bg-emerald-500/15 shadow-md shadow-emerald-500/20'
+                        : 'hover:bg-white/5 opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <div className="h-16 w-14 rounded-lg overflow-hidden bg-slate-900 border border-white/10 flex items-center justify-center mb-1">
+                      {thumb ? (
+                        <img src={thumb} alt={preset.label} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="h-full w-full bg-slate-800 animate-pulse" />
+                      )}
+                    </div>
+                    <span className={`text-[11px] whitespace-nowrap px-1 ${
+                      isActive ? 'font-bold text-emerald-300' : 'font-medium text-slate-300'
+                    }`}>
+                      {preset.label}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Bottom Action Bar */}
+          <div className="flex w-full items-center gap-2 pt-1">
+            <button
+              disabled={processing || filterApplying}
+              className="tap flex flex-col items-center justify-center gap-1 rounded-2xl glass-panel py-3 px-3 min-w-[70px] text-xs font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
+              onClick={retakePage}
+              aria-label="Chụp lại"
+            >
+              <RotateCcw className="h-5 w-5" />
+              <span>Chụp lại</span>
+            </button>
+
+            <button
+              disabled={processing || filterApplying}
+              className="tap flex flex-col items-center justify-center gap-1 rounded-2xl glass-panel py-3 px-3 min-w-[70px] text-xs font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
+              onClick={handleRotate90}
+              aria-label="Xoay 90 độ"
+            >
+              <RotateCw className="h-5 w-5" />
+              <span>Xoay 90°</span>
+            </button>
+
+            <button
+              disabled={processing || filterApplying}
+              className="tap flex flex-col items-center justify-center gap-1 rounded-2xl glass-panel py-3 px-3 min-w-[70px] text-xs font-semibold text-slate-200 active:scale-95 transition-all disabled:opacity-50"
+              onClick={handleReCrop}
+              aria-label="Chỉnh viền"
+            >
+              <Crop className="h-5 w-5" />
+              <span>Chỉnh viền</span>
+            </button>
+
+            <button
+              disabled={processing || filterApplying}
+              className="tap flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-400 py-3.5 px-3 text-base font-bold text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50 ml-1"
+              onClick={confirmPage}
+              aria-label="Xác nhận thêm"
+            >
+              <Check className="h-5 w-5 stroke-[2.5]" />
+              <span>Xác nhận thêm</span>
+            </button>
+          </div>
+        </main>
+      </>
+    )
+  }
 
   /* ───────── Gallery Screen ───────── */
   if (screen === 'gallery') return (
@@ -1118,29 +1380,9 @@ export default function App() {
       {ToastOverlay}
       <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
       <div>
-        <Header disabled={processing} back={() => { setDraft(null); setError(''); setScreen('camera'); startCamera() }} title="Chỉnh 4 góc" />
+        <Header disabled={processing} back={cancelAdjust} title="Chỉnh 4 góc" />
         <Adjust key={draft.raw} image={draft.raw} points={draft.points} setPoints={p => setDraft(d => ({ ...d, points: p }))} />
         {error && <p className="mt-3 rounded-2xl bg-red-950/80 border border-red-500/30 p-3 text-sm text-red-200">{error}</p>}
-
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {[
-            ['color', 'Ảnh gốc'],
-            ['gray', 'Xám rõ nét'],
-            ['bw', 'Đen trắng']
-          ].map(([k, n]) => (
-            <button
-              key={k}
-              onClick={() => setFilter(k)}
-              className={`tap rounded-xl py-3 px-2 text-sm font-bold transition-all active:scale-95 ${
-                filter === k
-                  ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
-                  : 'glass-panel text-slate-300'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
       </div>
 
       <button
