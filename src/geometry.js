@@ -218,3 +218,109 @@ export function recoverFoldedCorners(pts) {
 
   return null
 }
+
+/**
+ * Recovers 4 geometric document corners from an occluded polygon (5 to 12 vertices)
+ * where edges are partially blocked by fingers, pens, or background overlaps.
+ * Uses orientation clustering and primary line fitting to intersect the 4 boundary edges.
+ *
+ * @param {Array<{x: number, y: number}>} pts
+ * @returns {Array<{x: number, y: number}> | null} Ordered [tl, tr, br, bl] quad or null
+ */
+export function recoverOccludedQuad(pts) {
+  if (!pts || pts.length < 5 || pts.length > 12) return null
+  const n = pts.length
+  const origArea = polygonArea(pts)
+
+  // Extract all edge segments with length and direction angle
+  const edges = []
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i]
+    const p2 = pts[(i + 1) % n]
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    const len = Math.hypot(dx, dy)
+    if (len < 5) continue
+    let angle = Math.atan2(dy, dx)
+    if (angle < 0) angle += Math.PI // normalize to [0, PI)
+    edges.push({ i, p1, p2, len, angle, dx, dy })
+  }
+
+  if (edges.length < 4) return null
+
+  // Sort edges by length to find the primary orientation
+  const sortedByLen = [...edges].sort((a, b) => b.len - a.len)
+  const primary = sortedByLen[0]
+  const primaryAngle = primary.angle
+  const perpAngle = (primaryAngle + Math.PI / 2) % Math.PI
+
+  function angleDiff(a1, a2) {
+    let d = Math.abs(a1 - a2) % Math.PI
+    if (d > Math.PI / 2) d = Math.PI - d
+    return d
+  }
+
+  // Classify edges into parallel vs perpendicular relative to primary document axis
+  const group1 = [] // parallel to primary (e.g. top / bottom)
+  const group2 = [] // perpendicular to primary (e.g. left / right)
+
+  for (const e of edges) {
+    const d1 = angleDiff(e.angle, primaryAngle)
+    const d2 = angleDiff(e.angle, perpAngle)
+    if (d1 <= d2 && d1 < 0.45) {
+      group1.push(e)
+    } else if (d2 < d1 && d2 < 0.45) {
+      group2.push(e)
+    }
+  }
+
+  if (group1.length < 2 || group2.length < 2) return null
+
+  group1.sort((a, b) => b.len - a.len)
+  group2.sort((a, b) => b.len - a.len)
+
+  // Pick two opposite sides in group1
+  const e1a = group1[0]
+  let e1b = null
+  for (let j = 1; j < group1.length; j++) {
+    const midA = { x: (e1a.p1.x + e1a.p2.x) / 2, y: (e1a.p1.y + e1a.p2.y) / 2 }
+    const midB = { x: (group1[j].p1.x + group1[j].p2.x) / 2, y: (group1[j].p1.y + group1[j].p2.y) / 2 }
+    const dist = Math.hypot(midA.x - midB.x, midA.y - midB.y)
+    if (dist > 25) {
+      e1b = group1[j]
+      break
+    }
+  }
+
+  // Pick two opposite sides in group2
+  const e2a = group2[0]
+  let e2b = null
+  for (let j = 1; j < group2.length; j++) {
+    const midA = { x: (e2a.p1.x + e2a.p2.x) / 2, y: (e2a.p1.y + e2a.p2.y) / 2 }
+    const midB = { x: (group2[j].p1.x + group2[j].p2.x) / 2, y: (group2[j].p1.y + group2[j].p2.y) / 2 }
+    const dist = Math.hypot(midA.x - midB.x, midA.y - midB.y)
+    if (dist > 25) {
+      e2b = group2[j]
+      break
+    }
+  }
+
+  if (!e1b || !e2b) return null
+
+  // Compute 4 corner intersections
+  const c1 = lineIntersection(e1a.p1, e1a.p2, e2a.p1, e2a.p2)
+  const c2 = lineIntersection(e1a.p1, e1a.p2, e2b.p1, e2b.p2)
+  const c3 = lineIntersection(e1b.p1, e1b.p2, e2a.p1, e2a.p2)
+  const c4 = lineIntersection(e1b.p1, e1b.p2, e2b.p1, e2b.p2)
+
+  if (!c1 || !c2 || !c3 || !c4) return null
+
+  const quad = orderPoints([c1, c2, c3, c4])
+  if (!isReasonableQuad(quad)) return null
+
+  const qArea = polygonArea(quad)
+  if (qArea < origArea * 0.80 || qArea > origArea * 1.5) return null
+
+  return quad
+}
+
