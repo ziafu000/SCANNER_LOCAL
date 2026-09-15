@@ -25,7 +25,9 @@ import {
 } from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
 import { download, shareOrDownloadImages } from './export'
-import { orderPoints, isReasonableQuad, recoverFoldedCorners, polygonArea } from './geometry'
+import { orderPoints, isReasonableQuad, recoverFoldedCorners, recoverOccludedQuad, polygonArea } from './geometry'
+import { computeWarpDimensions } from './aspect-ratio'
+import { CornerStabilizer } from './stabilizer'
 import { FILTER_PRESETS, applyFilter, applyFilterAsync, generateFilterThumbnails } from './filters'
 import { extractClientCoords, calculateClampedPoint, updateCornerPoint, getSvgPolygonPoints } from './adjust-helper'
 import ErrorBoundary from './ErrorBoundary'
@@ -169,7 +171,7 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) 
               break
             }
           }
-        } else if ((approx.rows === 5 || approx.rows === 6) && cv.isContourConvex(approx)) {
+        } else if ((approx.rows >= 5 && approx.rows <= 10) && cv.isContourConvex(approx)) {
           const pts = []
           for (let j = 0; j < approx.rows; j++) {
             pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
@@ -185,7 +187,17 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) 
             }
           }
 
-          // Hand occlusion handling fallback if recoverFoldedCorners didn't trigger:
+          // Multi-edge occluded quad recovery (e.g. finger/hand occlusion or object on boundary)
+          const recoveredOccluded = recoverOccludedQuad(pts)
+          if (recoveredOccluded && isReasonableQuad(recoveredOccluded)) {
+            const recArea = polygonArea(recoveredOccluded)
+            if (recArea >= minArea) {
+              detectedQuad = recoveredOccluded
+              break
+            }
+          }
+
+          // Hand occlusion handling fallback if recoverFoldedCorners/recoverOccludedQuad didn't trigger:
           // finger holding edge creates a 5th vertex along paper edge
           if (approx.rows === 5) {
             let bestIdx = -1
@@ -246,6 +258,7 @@ function findOptimalCorners(canvas) {
   let src = null
   let gray = null
   let kernel = null
+  let clahe = null
   let fallbackCnt = null
   let fallbackArea = 0
 
@@ -254,6 +267,17 @@ function findOptimalCorners(canvas) {
     gray = new cv.Mat()
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
     cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT)
+
+    // Local Contrast Enhancement (CLAHE) before edge extraction to highlight paper boundaries
+    try {
+      if (cv.CLAHE) {
+        clahe = new cv.CLAHE(2.0, new cv.Size(8, 8))
+        clahe.apply(gray, gray)
+      }
+    } catch {
+      // Graceful fallback if CLAHE fails
+    }
+
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
 
     // Pass 1: Standard Contrast (40, 120)
@@ -292,6 +316,7 @@ function findOptimalCorners(canvas) {
 
     return null
   } finally {
+    if (clahe) clahe.delete()
     if (fallbackCnt) fallbackCnt.delete()
     if (kernel) kernel.delete()
     if (gray) gray.delete()
@@ -302,9 +327,7 @@ function findOptimalCorners(canvas) {
 function customExtract(srcCanvas, pts) {
   if (!window.cv) throw new Error('OpenCV chưa sẵn sàng')
   const cv = window.cv
-  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y)
-  const w = Math.round(Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2])))
-  const h = Math.round(Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2])))
+  const { width: w, height: h } = computeWarpDimensions(pts, srcCanvas.width, srcCanvas.height)
 
   if (w <= 0 || h <= 0 || !Number.isFinite(w) || !Number.isFinite(h)) {
     throw new Error('Kích thước cắt không hợp lệ')
@@ -344,6 +367,7 @@ function customExtract(srcCanvas, pts) {
 export default function App() {
   const video = useRef(), live = useRef(), stream = useRef(), scan = useRef(), frame = useRef(0)
   const activeCornersRef = useRef(null) // last green-box corners seen in the live preview (preview coords)
+  const cornerStabilizer = useRef(new CornerStabilizer())
   const [screen, setScreen] = useState('camera')
   const [status, setStatus] = useState('Đang tải bộ quét…')
   const [ready, setReady] = useState(false)
@@ -407,7 +431,12 @@ export default function App() {
     }
   }, [])
 
-  const stopped = () => { cancelAnimationFrame(frame.current); stream.current?.getTracks().forEach(t => t.stop()); stream.current = null }
+  const stopped = () => {
+    cancelAnimationFrame(frame.current)
+    cornerStabilizer.current.reset()
+    stream.current?.getTracks().forEach(t => t.stop())
+    stream.current = null
+  }
   const refreshGallery = async () => setGallery((await listScans()).sort((a, b) => b.createdAt - a.createdAt))
 
   const showToast = (msg) => {
@@ -437,6 +466,7 @@ export default function App() {
 
   async function startCamera() {
     activeCornersRef.current = null
+    cornerStabilizer.current.reset()
     stopped(); setError(''); setStatus('Đang mở camera…')
     try {
       const s = await navigator.mediaDevices.getUserMedia({
@@ -465,21 +495,22 @@ export default function App() {
     try {
       const pts = findOptimalCorners(o)
       if (pts) {
-        activeCornersRef.current = { pts, previewWidth: w, previewHeight: h }
+        const smoothedPts = cornerStabilizer.current.update(pts) || pts
+        activeCornersRef.current = { pts: smoothedPts, previewWidth: w, previewHeight: h }
         c.strokeStyle = '#10b981'
         c.lineWidth = 4
         c.beginPath()
-        c.moveTo(pts[0].x, pts[0].y)
-        c.lineTo(pts[1].x, pts[1].y)
-        c.lineTo(pts[2].x, pts[2].y)
-        c.lineTo(pts[3].x, pts[3].y)
+        c.moveTo(smoothedPts[0].x, smoothedPts[0].y)
+        c.lineTo(smoothedPts[1].x, smoothedPts[1].y)
+        c.lineTo(smoothedPts[2].x, smoothedPts[2].y)
+        c.lineTo(smoothedPts[3].x, smoothedPts[3].y)
         c.closePath()
         c.stroke()
 
         c.fillStyle = 'rgba(16, 185, 129, 0.12)'
         c.fill()
 
-        for (const pt of pts) {
+        for (const pt of smoothedPts) {
           c.fillStyle = '#ffffff'
           c.beginPath()
           c.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
@@ -489,9 +520,11 @@ export default function App() {
           c.stroke()
         }
       } else {
+        cornerStabilizer.current.reset()
         activeCornersRef.current = null
       }
     } catch {
+      cornerStabilizer.current.reset()
       activeCornersRef.current = null
     }
     frame.current = requestAnimationFrame(drawLive)
