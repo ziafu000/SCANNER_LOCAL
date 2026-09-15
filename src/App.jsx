@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { listScans, putScan, removeScan } from './db'
 import { download, shareOrDownloadImages } from './export'
+import { orderPoints, isReasonableQuad } from './geometry'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
@@ -67,37 +68,6 @@ function fitPoints(w, h) {
     { x: w * 0.92, y: h * 0.92 },
     { x: w * 0.08, y: h * 0.92 },
   ]
-}
-
-function orderPoints(pts) {
-  const sumSorted = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
-  const tl = sumSorted[0]
-  const br = sumSorted[3]
-  const remaining = [sumSorted[1], sumSorted[2]]
-  remaining.sort((a, b) => (b.x - b.y) - (a.x - a.y))
-  return [tl, remaining[0], br, remaining[1]]
-}
-
-function isReasonableQuad(pts) {
-  if (!pts || pts.length !== 4) return false
-  const [tl, tr, br, bl] = pts
-  const top = Math.hypot(tr.x - tl.x, tr.y - tl.y)
-  const right = Math.hypot(br.x - tr.x, br.y - tr.y)
-  const bottom = Math.hypot(br.x - bl.x, br.y - bl.y)
-  const left = Math.hypot(bl.x - tl.x, bl.y - tl.y)
-
-  if (top < 15 || bottom < 15 || left < 15 || right < 15) return false
-
-  const widthRatio = Math.min(top, bottom) / Math.max(top, bottom)
-  const heightRatio = Math.min(left, right) / Math.max(left, right)
-  if (widthRatio < 0.35 || heightRatio < 0.35) return false
-
-  const avgWidth = (top + bottom) / 2
-  const avgHeight = (left + right) / 2
-  const ar = avgWidth / avgHeight
-  if (ar < 0.2 || ar > 5.0) return false
-
-  return true
 }
 
 function getMinAreaRectPoints(cv, cnt) {
@@ -180,7 +150,7 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) 
       const peri = cv.arcLength(hull, true)
       if (peri <= 0) continue
 
-      for (const eps of [0.015, 0.02, 0.025, 0.03, 0.04]) {
+      for (const eps of [0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.06]) {
         cv.approxPolyDP(hull, approx, eps * peri, true)
         if (approx.rows === 4 && cv.isContourConvex(approx)) {
           const approxArea = Math.abs(cv.contourArea(approx))
@@ -190,6 +160,38 @@ function extractCandidateQuad(cv, gray, kernel, lowThresh, highThresh, minArea) 
               pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
             }
             const ordered = orderPoints(pts)
+            if (isReasonableQuad(ordered)) {
+              detectedQuad = ordered
+              break
+            }
+          }
+        } else if (approx.rows === 5 && cv.isContourConvex(approx)) {
+          // Hand occlusion handling: finger holding edge creates a 5th vertex.
+          // Find vertex with angle closest to 180 deg (flattest vertex along paper edge)
+          const pts5 = []
+          for (let j = 0; j < 5; j++) {
+            pts5.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
+          }
+          let bestIdx = -1
+          let minCos = 0
+          for (let j = 0; j < 5; j++) {
+            const pPrev = pts5[(j + 4) % 5]
+            const pCurr = pts5[j]
+            const pNext = pts5[(j + 1) % 5]
+            const v1x = pPrev.x - pCurr.x, v1y = pPrev.y - pCurr.y
+            const v2x = pNext.x - pCurr.x, v2y = pNext.y - pCurr.y
+            const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y)
+            if (l1 > 1e-6 && l2 > 1e-6) {
+              const cosA = (v1x * v2x + v1y * v2y) / (l1 * l2)
+              if (cosA < -0.65 && cosA < minCos) {
+                minCos = cosA
+                bestIdx = j
+              }
+            }
+          }
+          if (bestIdx !== -1) {
+            const pts4 = pts5.filter((_, idx) => idx !== bestIdx)
+            const ordered = orderPoints(pts4)
             if (isReasonableQuad(ordered)) {
               detectedQuad = ordered
               break
@@ -234,11 +236,11 @@ function findOptimalCorners(canvas) {
     src = cv.imread(canvas)
     gray = new cv.Mat()
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT)
+    cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT)
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
 
-    // Pass 1: Standard Contrast (30, 90)
-    const pass1 = extractCandidateQuad(cv, gray, kernel, 30, 90, minArea)
+    // Pass 1: Standard Contrast (40, 120)
+    const pass1 = extractCandidateQuad(cv, gray, kernel, 40, 120, minArea)
     if (pass1.quad) {
       if (pass1.largestCnt) pass1.largestCnt.delete()
       return pass1.quad
@@ -246,8 +248,8 @@ function findOptimalCorners(canvas) {
     fallbackCnt = pass1.largestCnt
     fallbackArea = pass1.largestArea
 
-    // Pass 2: Sensitive Low-Contrast Fallback (12, 36)
-    const pass2 = extractCandidateQuad(cv, gray, kernel, 12, 36, minArea)
+    // Pass 2: Sensitive Low-Contrast Fallback (20, 60)
+    const pass2 = extractCandidateQuad(cv, gray, kernel, 20, 60, minArea)
     if (pass2.quad) {
       if (pass2.largestCnt) pass2.largestCnt.delete()
       return pass2.quad
@@ -265,7 +267,10 @@ function findOptimalCorners(canvas) {
 
     // Fallback: minAreaRect on largest candidate if multi-epsilon approximation failed
     if (fallbackCnt) {
-      return getMinAreaRectPoints(cv, fallbackCnt)
+      const rectPts = getMinAreaRectPoints(cv, fallbackCnt)
+      if (isReasonableQuad(rectPts)) {
+        return rectPts
+      }
     }
 
     return null
