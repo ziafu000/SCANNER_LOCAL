@@ -2,6 +2,12 @@
  * Geometry helper utilities for document quad detection & validation.
  */
 
+/**
+ * Orders 4 quadrilateral points into [top-left, top-right, bottom-right, bottom-left].
+ *
+ * @param {Array<{x: number, y: number}>} pts
+ * @returns {Array<{x: number, y: number}>}
+ */
 export function orderPoints(pts) {
   const sumSorted = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
   const tl = sumSorted[0]
@@ -11,6 +17,16 @@ export function orderPoints(pts) {
   return [tl, remaining[0], br, remaining[1]]
 }
 
+/**
+ * Validates whether 4 points form a plausible document quadrilateral:
+ * - Minimum edge length >= 15px
+ * - Parallel edge ratio >= 0.55 for both width and height
+ * - Document aspect ratio between 0.3 and 3.5
+ * - Interior angles between ~65° and ~115° (|cos| <= 0.42)
+ *
+ * @param {Array<{x: number, y: number}>} pts
+ * @returns {boolean}
+ */
 export function isReasonableQuad(pts) {
   if (!pts || pts.length !== 4) return false
   const [tl, tr, br, bl] = pts
