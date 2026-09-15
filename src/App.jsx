@@ -24,8 +24,6 @@ import { listScans, putScan, removeScan } from './db'
 import { download, shareOrDownloadImages } from './export'
 import { orderPoints, isReasonableQuad } from './geometry'
 
-export { orderPoints, isReasonableQuad }
-
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = (canvas) => new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
 const urlOf = blob => URL.createObjectURL(blob)
