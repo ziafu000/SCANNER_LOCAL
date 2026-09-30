@@ -222,4 +222,17 @@ describe('Supabase Client Safety & Fallback', () => {
       assert.equal(consumeRes.remaining, undefined)
     }
   })
+
+  it('verifies Google OAuth is strictly excluded from client exports', async () => {
+    const supabaseModule = await import('../src/supabase.js')
+    assert.equal(typeof supabaseModule.signInWithGoogle, 'undefined')
+  })
+
+  it('ensures transport failure in consumeUserScan never injects false remaining: 0', async () => {
+    // When consumeUserScan fails, remaining must not be 0 so clients do not lock out users falsely
+    const res = await consumeUserScan(null)
+    assert.equal(res.success, false)
+    assert.notEqual(res.remaining, 0)
+  })
 })
+
