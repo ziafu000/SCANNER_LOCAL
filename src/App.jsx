@@ -31,6 +31,11 @@ import { CornerStabilizer } from './stabilizer'
 import { FILTER_PRESETS, applyFilter, applyFilterAsync, generateFilterThumbnails } from './filters'
 import { extractClientCoords, calculateClampedPoint, updateCornerPoint, getSvgPolygonPoints } from './adjust-helper'
 import ErrorBoundary from './ErrorBoundary'
+import { useAuthQuota } from './hooks/useAuthQuota'
+import { QuotaBadge, UserButton } from './components/QuotaBadge'
+import { AuthModal } from './components/AuthModal'
+import { UserAccountModal } from './components/UserAccountModal'
+import { QuotaExceededModal } from './components/QuotaExceededModal'
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const blobFrom = async (canvas) => {
@@ -394,6 +399,13 @@ export default function App() {
   // Fullscreen lightbox: URL of image to show, or null
   const [lightbox, setLightbox] = useState(null)
 
+  // Auth and Scan Quota management
+  const authQuota = useAuthQuota()
+  const [showAuthModal, setShowAuthModal] = useState(false)
+  const [authModalMode, setAuthModalMode] = useState('signin')
+  const [showAccountModal, setShowAccountModal] = useState(false)
+  const [showQuotaExceededModal, setShowQuotaExceededModal] = useState(false)
+
   useEffect(() => {
     const nextPages = viewRecord?.pages.map((blob, i) => ({
       id: `${viewRecord.id}-${i}`,
@@ -532,6 +544,10 @@ export default function App() {
 
   async function capture() {
     if (processingRef.current || !video.current?.videoWidth) return
+    if (!authQuota.canScan()) {
+      setShowQuotaExceededModal(true)
+      return
+    }
     processingRef.current = true
     setProcessing(true)
     try {
@@ -769,6 +785,10 @@ export default function App() {
         showToast(`Đã thêm trang ${updated.length}`)
         return updated
       })
+
+      // Consume 1 scan from quota
+      await authQuota.consumeScan()
+
       setScreen('camera')
       setStatus('Đưa tờ giấy vào khung xanh')
       await new Promise(resolve => setTimeout(resolve, 100))
@@ -1029,6 +1049,46 @@ export default function App() {
     </div>
   ) : null
 
+  /* ───────── Modals overlay (Auth, Account, Quota Exceeded) ───────── */
+  const ModalsOverlay = (
+    <>
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        authQuota={authQuota}
+        defaultMode={authModalMode}
+        onSuccess={() => {
+          showToast(authQuota.user ? 'Đăng nhập thành công' : 'Hoàn tất')
+        }}
+      />
+
+      <UserAccountModal
+        isOpen={showAccountModal}
+        onClose={() => setShowAccountModal(false)}
+        user={authQuota.user}
+        quota={authQuota.quota}
+        onSignOut={async () => {
+          await authQuota.signOut()
+          showToast('Đã đăng xuất tài khoản')
+        }}
+        onRefreshQuota={async () => {
+          await authQuota.refreshQuota()
+          showToast('Đã đồng bộ số lượt quét')
+        }}
+      />
+
+      <QuotaExceededModal
+        isOpen={showQuotaExceededModal}
+        onClose={() => setShowQuotaExceededModal(false)}
+        isGuest={authQuota.isGuest}
+        onOpenAuth={(mode) => {
+          setAuthModalMode(mode || 'signup')
+          setShowAuthModal(true)
+        }}
+      />
+    </>
+  )
+
   /* ───────── Capture Confirmation & CamScanner Preview Screen ───────── */
   if (screen === 'confirm') {
     const currentImgUrl = isComparing ? pendingCapture?.originalUrl : pendingCapture?.filteredUrl
@@ -1037,6 +1097,7 @@ export default function App() {
       <>
         {LightboxOverlay}
         {ToastOverlay}
+        {ModalsOverlay}
         <main className="safe flex min-h-full flex-col justify-between bg-slate-950 p-4">
           <Header back={retakePage} title="Xem lại & Tinh chỉnh" />
 
@@ -1173,8 +1234,22 @@ export default function App() {
   if (screen === 'gallery') return (
     <>
       {ToastOverlay}
+      {ModalsOverlay}
       <main className="safe min-h-full bg-slate-950 p-5 flex flex-col">
-      <Header back={() => { setScreen('camera'); startCamera() }} title="Thư viện tài liệu" />
+      <Header
+        back={() => { setScreen('camera'); startCamera() }}
+        title="Thư viện tài liệu"
+        rightContent={
+          <QuotaBadge
+            quota={authQuota.quota}
+            user={authQuota.user}
+            onClick={() => {
+              if (authQuota.user) setShowAccountModal(true)
+              else { setAuthModalMode('signin'); setShowAuthModal(true); }
+            }}
+          />
+        }
+      />
       {gallery.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center rounded-3xl border border-white/10 bg-slate-900/40 p-10 text-center backdrop-blur-xl">
           <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full glass-pill text-slate-400">
@@ -1236,9 +1311,23 @@ export default function App() {
       <>
         {LightboxOverlay}
         {ToastOverlay}
+        {ModalsOverlay}
         <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
           <div>
-            <Header back={() => { setViewRecord(null); setScreen('gallery') }} title={rec?.name ?? 'Tài liệu'} />
+            <Header
+              back={() => { setViewRecord(null); setScreen('gallery') }}
+              title={rec?.name ?? 'Tài liệu'}
+              rightContent={
+                <QuotaBadge
+                  quota={authQuota.quota}
+                  user={authQuota.user}
+                  onClick={() => {
+                    if (authQuota.user) setShowAccountModal(true)
+                    else { setAuthModalMode('signin'); setShowAuthModal(true); }
+                  }}
+                />
+              }
+            />
             <div className="mb-5 flex items-center justify-between text-xs text-slate-400 border-b border-white/5 pb-3">
               <span>{rec?.pages.length ?? 0} trang tài liệu</span>
               <span>{rec ? label(rec.createdAt) : ''}</span>
@@ -1304,9 +1393,23 @@ export default function App() {
     <>
       {LightboxOverlay}
       {ToastOverlay}
+      {ModalsOverlay}
       <main className="safe min-h-full bg-slate-950 p-5 flex flex-col justify-between">
         <div>
-          <Header back={() => { setScreen('camera'); startCamera() }} title="Giỏ trang quét" />
+          <Header
+            back={() => { setScreen('camera'); startCamera() }}
+            title="Giỏ trang quét"
+            rightContent={
+              <QuotaBadge
+                quota={authQuota.quota}
+                user={authQuota.user}
+                onClick={() => {
+                  if (authQuota.user) setShowAccountModal(true)
+                  else { setAuthModalMode('signin'); setShowAuthModal(true); }
+                }}
+              />
+            }
+          />
 
           <div className="mb-5">
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Tên tài liệu xuất</label>
@@ -1426,6 +1529,7 @@ export default function App() {
   if (screen === 'adjust') return (
     <ErrorBoundary onReset={cancelAdjust} onNavigateCamera={cancelAdjust}>
       {ToastOverlay}
+      {ModalsOverlay}
       <main className="safe min-h-full bg-slate-950 p-4 flex flex-col justify-between">
         <div>
           <Header disabled={processing} back={cancelAdjust} title="Chỉnh 4 góc" />
@@ -1456,30 +1560,49 @@ export default function App() {
   return (
     <>
       {ToastOverlay}
+      {ModalsOverlay}
       <main className="safe flex min-h-full flex-col bg-slate-950 justify-between">
       <header className="px-4 pt-1 pb-2">
-        <div className="flex items-center justify-between rounded-2xl glass-panel px-4 py-2.5 shadow-xl">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-400/20 text-emerald-400 border border-emerald-400/30">
+        <div className="flex items-center justify-between rounded-2xl glass-panel px-3.5 py-2 shadow-xl gap-2">
+          <div className="flex items-center gap-2 min-w-0 shrink">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-400/20 text-emerald-400 border border-emerald-400/30">
               <Camera className="h-4 w-4" />
             </div>
-            <div>
-              <h1 className="text-base font-extrabold tracking-tight text-white leading-none">SCANNER</h1>
+            <div className="min-w-0">
+              <h1 className="text-sm font-extrabold tracking-tight text-white leading-none truncate">SCANNER</h1>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <p className="text-[11px] font-medium text-emerald-400">{status}</p>
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 animate-pulse" />
+                <p className="text-[10px] font-medium text-emerald-400 truncate">{status}</p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <QuotaBadge
+              quota={authQuota.quota}
+              user={authQuota.user}
+              onClick={() => {
+                if (authQuota.user) setShowAccountModal(true)
+                else { setAuthModalMode('signin'); setShowAuthModal(true); }
+              }}
+            />
+
+            <UserButton
+              user={authQuota.user}
+              onClick={() => {
+                if (authQuota.user) setShowAccountModal(true)
+                else { setAuthModalMode('signin'); setShowAuthModal(true); }
+              }}
+            />
+
             <button
               disabled={processing}
               onClick={() => { stopped(); setScreen('cart') }}
-              className="tap flex items-center gap-1.5 rounded-xl bg-emerald-400/15 border border-emerald-400/30 px-3 py-1.5 text-xs font-bold text-emerald-300 active:scale-95 transition-all disabled:opacity-50"
+              className="tap flex items-center gap-1 rounded-xl bg-emerald-400/15 border border-emerald-400/30 px-2.5 py-1.5 text-xs font-bold text-emerald-300 active:scale-95 transition-all disabled:opacity-50"
+              title="Giỏ trang quét"
             >
               <Layers className="h-3.5 w-3.5" />
-              <span>{pages.length} trang</span>
+              <span>{pages.length}</span>
             </button>
 
             <button
@@ -1487,6 +1610,7 @@ export default function App() {
               onClick={() => { stopped(); setScreen('gallery') }}
               className="tap flex items-center justify-center rounded-xl glass-pill h-8 w-8 text-slate-200 active:scale-95 transition-all disabled:opacity-50"
               aria-label="Thư viện"
+              title="Thư viện tài liệu"
             >
               <FolderOpen className="h-4 w-4" />
             </button>
@@ -1525,7 +1649,9 @@ export default function App() {
 
       <div className="px-4 pt-2 pb-4 text-center">
         <p className="mb-3 text-xs font-medium text-slate-400 tracking-wide">
-          Đặt tài liệu trong khung xanh để tự động nhận diện
+          {authQuota.quota?.remaining === 0
+            ? 'Đã hết lượt quét - Nhấn để nhận thêm'
+            : 'Đặt tài liệu trong khung xanh để tự động nhận diện'}
         </p>
 
         <div className="flex items-center justify-center">
@@ -1533,9 +1659,17 @@ export default function App() {
             disabled={!ready || processing}
             onClick={capture}
             aria-label="Chụp tài liệu"
-            className="group relative flex h-20 w-20 items-center justify-center rounded-full border-4 border-white/80 p-1 active:scale-90 transition-transform duration-150 disabled:opacity-40"
+            className={`group relative flex h-20 w-20 items-center justify-center rounded-full border-4 p-1 active:scale-90 transition-transform duration-150 disabled:opacity-40 ${
+              authQuota.quota?.remaining === 0
+                ? 'border-rose-400/80 shadow-rose-500/30'
+                : 'border-white/80'
+            }`}
           >
-            <span className="h-full w-full rounded-full bg-white transition-transform group-active:scale-95 shadow-inner" />
+            <span className={`h-full w-full rounded-full transition-transform group-active:scale-95 shadow-inner ${
+              authQuota.quota?.remaining === 0
+                ? 'bg-rose-400'
+                : 'bg-white'
+            }`} />
           </button>
         </div>
 
@@ -1545,18 +1679,21 @@ export default function App() {
   )
 }
 
-function Header({ back, title, disabled = false }) {
+function Header({ back, title, disabled = false, rightContent = null }) {
   return (
-    <header className="mb-4 flex items-center gap-3">
-      <button
-        disabled={disabled}
-        onClick={back}
-        className="tap flex h-10 w-10 items-center justify-center rounded-xl glass-panel text-slate-200 active:scale-90 transition-all disabled:opacity-50 shadow-md"
-        aria-label="Quay lại"
-      >
-        <ChevronLeft className="h-6 w-6 stroke-[2.5]" />
-      </button>
-      <h1 className="text-xl font-bold tracking-tight text-white">{title}</h1>
+    <header className="mb-4 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <button
+          disabled={disabled}
+          onClick={back}
+          className="tap flex h-10 w-10 shrink-0 items-center justify-center rounded-xl glass-panel text-slate-200 active:scale-90 transition-all disabled:opacity-50 shadow-md"
+          aria-label="Quay lại"
+        >
+          <ChevronLeft className="h-6 w-6 stroke-[2.5]" />
+        </button>
+        <h1 className="text-xl font-bold tracking-tight text-white truncate">{title}</h1>
+      </div>
+      {rightContent && <div className="shrink-0">{rightContent}</div>}
     </header>
   )
 }
