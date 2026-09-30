@@ -10,7 +10,6 @@ import {
   UserPlus,
   AlertCircle,
   CheckCircle2,
-  Send,
   ShieldCheck,
 } from 'lucide-react'
 
@@ -21,7 +20,7 @@ export function AuthModal({
   defaultMode = 'signin',
   onSuccess,
 }) {
-  const [mode, setMode] = useState(defaultMode) // 'signin' | 'signup' | 'magic'
+  const [mode, setMode] = useState(defaultMode === 'signup' ? 'signup' : 'signin') // 'signin' | 'signup'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -81,14 +80,7 @@ export function AuthModal({
 
     setLoading(true)
     try {
-      if (mode === 'magic') {
-        const res = await authQuota.signInWithMagicLink(cleanEmail)
-        if (!res.success) {
-          setError(translateError(res.error))
-        } else {
-          setSuccessMessage('Đã gửi liên kết đăng nhập đến email của bạn! Vui lòng kiểm tra hộp thư.')
-        }
-      } else if (mode === 'signup') {
+      if (mode === 'signup') {
         if (!password || password.length < 6) {
           setError('Mật khẩu phải có ít nhất 6 ký tự.')
           setLoading(false)
@@ -177,8 +169,6 @@ export function AuthModal({
           <h2 id="auth-modal-title" className="text-xl font-bold tracking-tight text-white">
             {mode === 'signup'
               ? 'Tạo tài khoản SCANNER'
-              : mode === 'magic'
-              ? 'Đăng nhập bằng Email'
               : 'Đăng nhập tài khoản'}
           </h2>
           <p className="mt-1 text-xs text-slate-400">
@@ -225,17 +215,6 @@ export function AuthModal({
           >
             Đăng ký (+20 lượt)
           </button>
-          <button
-            type="button"
-            onClick={() => handleTabChange('magic')}
-            className={`flex-1 rounded-xl py-2 text-xs font-semibold transition-all ${
-              mode === 'magic'
-                ? 'bg-emerald-500 text-slate-950 shadow-md font-bold'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Link Email
-          </button>
         </div>
 
         {/* Error message */}
@@ -275,45 +254,34 @@ export function AuthModal({
             </div>
           </div>
 
-          {/* Password field (for Signin & Signup) */}
-          {mode !== 'magic' && (
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <label className="text-xs font-medium text-slate-300">
-                  Mật khẩu
-                </label>
-                {mode === 'signin' && (
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('magic')}
-                    className="text-[11px] text-emerald-400 hover:underline"
-                  >
-                    Quên mật khẩu?
-                  </button>
-                )}
-              </div>
-              <div className="relative">
-                <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={mode === 'signup' ? 'Tối thiểu 6 ký tự' : 'Nhập mật khẩu'}
-                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                  className="w-full rounded-xl border border-white/10 bg-black/40 py-2.5 pl-10 pr-10 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
+          {/* Password field */}
+          <div>
+            <div className="mb-1">
+              <label className="text-xs font-medium text-slate-300">
+                Mật khẩu
+              </label>
             </div>
-          )}
+            <div className="relative">
+              <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === 'signup' ? 'Tối thiểu 6 ký tự' : 'Nhập mật khẩu'}
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                className="w-full rounded-xl border border-white/10 bg-black/40 py-2.5 pl-10 pr-10 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-all"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
 
           {/* Submit Button */}
           <button
@@ -327,11 +295,6 @@ export function AuthModal({
               <>
                 <UserPlus className="h-4 w-4 stroke-[2.5]" />
                 <span>Đăng ký &amp; Nhận 20 lượt</span>
-              </>
-            ) : mode === 'magic' ? (
-              <>
-                <Send className="h-4 w-4 stroke-[2.5]" />
-                <span>Gửi link đăng nhập</span>
               </>
             ) : (
               <>

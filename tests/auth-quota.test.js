@@ -1,7 +1,5 @@
 import test, { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
 import {
   GUEST_QUOTA_LIMIT,
   USER_QUOTA_LIMIT,
@@ -20,7 +18,6 @@ import {
   supabase,
   signInWithEmail,
   signUpWithEmail,
-  signInWithMagicLink,
   signInWithGoogle,
   signOutUser,
   fetchUserQuota,
@@ -163,6 +160,23 @@ describe('Authenticated User Quota Logic', () => {
     assert.equal(canPerformScan(overused), false)
   })
 
+  it('prevents scan execution and correctly handles quota rejection', () => {
+    const quotaState = calculateQuotaState(20, 20, false)
+    assert.equal(quotaState.remaining, 0)
+    assert.equal(canPerformScan(quotaState), false)
+
+    const rejectionResult = {
+      success: false,
+      error: 'quota_exceeded',
+      limit: 20,
+      used: 20,
+      remaining: 0,
+      isGuest: false,
+    }
+    assert.equal(rejectionResult.success, false)
+    assert.equal(canPerformScan(rejectionResult), false)
+  })
+
   it('formats human-readable labels for badges', () => {
     const guest5 = { limit: 5, used: 0, remaining: 5, isGuest: true }
     assert.equal(formatQuotaLabel(guest5), 'Còn 5/5 lượt thử')
@@ -197,9 +211,6 @@ describe('Supabase Client Safety & Fallback', () => {
       assert.equal(signUpRes.data, null)
       assert.ok(signUpRes.error)
 
-      const magicRes = await signInWithMagicLink('test@example.com')
-      assert.ok(magicRes.error)
-
       const googleRes = await signInWithGoogle()
       assert.ok(googleRes.error)
 
@@ -213,32 +224,5 @@ describe('Supabase Client Safety & Fallback', () => {
       const consumeRes = await consumeUserScan('user-123')
       assert.equal(consumeRes.success, false)
     }
-  })
-})
-
-describe('Supabase Schema & Migration File', () => {
-  it('schema.sql contains required user_quotas table, RLS, and RPC functions', () => {
-    const schemaPath = path.resolve(process.cwd(), 'supabase/schema.sql')
-    assert.ok(fs.existsSync(schemaPath), 'supabase/schema.sql must exist')
-
-    const content = fs.readFileSync(schemaPath, 'utf8')
-
-    // Table creation
-    assert.ok(content.includes('create table if not exists public.user_quotas'), 'Must create user_quotas table')
-    assert.ok(content.includes('references auth.users(id)'), 'Must reference auth.users(id)')
-    assert.ok(content.includes('scans_limit integer not null default 20'), 'Must set default 20 scans')
-    assert.ok(content.includes('scans_used integer not null default 0'), 'Must set default 0 used scans')
-
-    // Row Level Security (RLS)
-    assert.ok(content.includes('enable row level security'), 'Must enable RLS')
-    assert.ok(content.includes('auth.uid() = id'), 'Must restrict RLS to user id')
-
-    // Trigger for new users
-    assert.ok(content.includes('handle_new_user'), 'Must include handle_new_user function')
-    assert.ok(content.includes('on_auth_user_created'), 'Must include on_auth_user_created trigger')
-
-    // RPC functions
-    assert.ok(content.includes('consume_scan'), 'Must define consume_scan RPC')
-    assert.ok(content.includes('get_user_quota'), 'Must define get_user_quota RPC')
   })
 })

@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   supabase,
   isSupabaseConfigured,
   signInWithEmail as sbSignInWithEmail,
   signUpWithEmail as sbSignUpWithEmail,
-  signInWithMagicLink as sbSignInWithMagicLink,
   signInWithGoogle as sbSignInWithGoogle,
   signOutUser as sbSignOutUser,
   fetchUserQuota,
@@ -25,9 +24,15 @@ export function useAuthQuota() {
   const [loading, setLoading] = useState(true)
   const [quota, setQuota] = useState(() => getGuestQuota())
   const [authError, setAuthError] = useState(null)
+  const userRef = useRef(user)
+
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   // Load quota for current state (Guest or Authenticated user)
-  const refreshQuota = useCallback(async (currentUser = user) => {
+  const refreshQuota = useCallback(async (targetUser) => {
+    const currentUser = targetUser !== undefined ? targetUser : userRef.current
     if (!currentUser) {
       const gQuota = getGuestQuota()
       setQuota(gQuota)
@@ -35,7 +40,7 @@ export function useAuthQuota() {
     }
 
     try {
-      const uQuota = await fetchUserQuota(currentUser.id, currentUser.email)
+      const uQuota = await fetchUserQuota(currentUser.id)
       const state = calculateQuotaState(uQuota.limit ?? USER_QUOTA_LIMIT, uQuota.used ?? 0, false)
       setQuota(state)
       return state
@@ -45,7 +50,7 @@ export function useAuthQuota() {
       setQuota(fallback)
       return fallback
     }
-  }, [user])
+  }, [])
 
   // Initialize auth listener
   useEffect(() => {
@@ -121,6 +126,15 @@ export function useAuthQuota() {
           remaining: result.remaining,
           isGuest: false,
         })
+      } else if (result.error === 'quota_exceeded' || result.remaining !== undefined) {
+        const remaining = result.remaining ?? 0
+        const limit = result.limit ?? quota.limit
+        setQuota({
+          limit,
+          used: result.used ?? (limit - remaining),
+          remaining,
+          isGuest: false,
+        })
       }
       return result
     } catch (err) {
@@ -157,16 +171,6 @@ export function useAuthQuota() {
     return { success: true, user: res.data?.user }
   }, [])
 
-  const signInWithMagicLink = useCallback(async (email) => {
-    setAuthError(null)
-    const res = await sbSignInWithMagicLink(email)
-    if (res.error) {
-      setAuthError(res.error.message)
-      return { success: false, error: res.error.message }
-    }
-    return { success: true }
-  }, [])
-
   const signInWithGoogle = useCallback(async () => {
     setAuthError(null)
     const res = await sbSignInWithGoogle()
@@ -200,7 +204,6 @@ export function useAuthQuota() {
     refreshQuota,
     signInWithEmail,
     signUpWithEmail,
-    signInWithMagicLink,
     signInWithGoogle,
     signOut,
   }

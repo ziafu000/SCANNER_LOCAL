@@ -17,19 +17,16 @@ create table if not exists public.user_quotas (
 alter table public.user_quotas enable row level security;
 
 -- 2. Chính sách bảo mật RLS
--- Người dùng chỉ có thể xem quota của chính mình
+-- Người dùng chỉ có quyền xem quota của chính mình (chỉ đọc).
+-- Việc trừ và cập nhật lượt quét chỉ được thực hiện thông qua hàm RPC bảo mật (consume_scan).
 drop policy if exists "Users can view their own quota" on public.user_quotas;
 create policy "Users can view their own quota"
   on public.user_quotas
   for select
   using (auth.uid() = id);
 
--- Người dùng có thể cập nhật quota của chính mình
+-- Không cho phép client cập nhật trực tiếp bảng user_quotas
 drop policy if exists "Users can update their own quota" on public.user_quotas;
-create policy "Users can update their own quota"
-  on public.user_quotas
-  for update
-  using (auth.uid() = id);
 
 -- 3. Trigger tự động cấp 20 lượt quét mặc định khi người dùng mới đăng ký
 create or replace function public.handle_new_user()
