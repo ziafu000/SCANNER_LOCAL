@@ -18,7 +18,6 @@ import {
   supabase,
   signInWithEmail,
   signUpWithEmail,
-  signInWithGoogle,
   signOutUser,
   fetchUserQuota,
   consumeUserScan,
@@ -211,9 +210,6 @@ describe('Supabase Client Safety & Fallback', () => {
       assert.equal(signUpRes.data, null)
       assert.ok(signUpRes.error)
 
-      const googleRes = await signInWithGoogle()
-      assert.ok(googleRes.error)
-
       const signOutRes = await signOutUser()
       assert.equal(signOutRes.error, null)
 
@@ -223,6 +219,7 @@ describe('Supabase Client Safety & Fallback', () => {
 
       const consumeRes = await consumeUserScan('user-123')
       assert.equal(consumeRes.success, false)
+      assert.equal(consumeRes.remaining, undefined)
     }
   })
 })

@@ -53,21 +53,6 @@ export async function signUpWithEmail(email, password) {
 }
 
 /**
- * Sign in using Google OAuth.
- */
-export async function signInWithGoogle() {
-  if (!supabase) {
-    return { data: null, error: { message: 'Supabase chưa được cấu hình' } }
-  }
-  return await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: {
-      redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
-    },
-  })
-}
-
-/**
  * Sign out current user.
  */
 export async function signOutUser() {
@@ -113,14 +98,14 @@ export async function fetchUserQuota(userId) {
  */
 export async function consumeUserScan(userId) {
   if (!supabase || !userId) {
-    return { success: false, error: 'unauthorized', remaining: 0 }
+    return { success: false, error: 'unauthorized' }
   }
 
   try {
     const { data, error } = await supabase.rpc('consume_scan')
     if (error) {
       console.warn('Lỗi khi gọi consume_scan:', error.message)
-      return { success: false, error: error.message, remaining: 0 }
+      return { success: false, error: error.message }
     }
 
     if (data && data.success !== undefined) {
@@ -137,9 +122,9 @@ export async function consumeUserScan(userId) {
       }
     }
 
-    return { success: false, error: 'unknown_response', remaining: 0 }
+    return { success: false, error: 'unknown_response' }
   } catch (err) {
     console.error('Lỗi khi trừ lượt quét Supabase:', err)
-    return { success: false, error: err.message, remaining: 0 }
+    return { success: false, error: err.message }
   }
 }

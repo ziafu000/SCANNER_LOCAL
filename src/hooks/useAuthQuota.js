@@ -4,7 +4,6 @@ import {
   isSupabaseConfigured,
   signInWithEmail as sbSignInWithEmail,
   signUpWithEmail as sbSignUpWithEmail,
-  signInWithGoogle as sbSignInWithGoogle,
   signOutUser as sbSignOutUser,
   fetchUserQuota,
   consumeUserScan,
@@ -126,13 +125,12 @@ export function useAuthQuota() {
           remaining: result.remaining,
           isGuest: false,
         })
-      } else if (result.error === 'quota_exceeded' || result.remaining !== undefined) {
-        const remaining = result.remaining ?? 0
+      } else if (result.error === 'quota_exceeded') {
         const limit = result.limit ?? quota.limit
         setQuota({
           limit,
-          used: result.used ?? (limit - remaining),
-          remaining,
+          used: result.used ?? limit,
+          remaining: 0,
           isGuest: false,
         })
       }
@@ -171,16 +169,6 @@ export function useAuthQuota() {
     return { success: true, user: res.data?.user }
   }, [])
 
-  const signInWithGoogle = useCallback(async () => {
-    setAuthError(null)
-    const res = await sbSignInWithGoogle()
-    if (res?.error) {
-      setAuthError(res.error.message)
-      return { success: false, error: res.error.message }
-    }
-    return { success: true }
-  }, [])
-
   const signOut = useCallback(async () => {
     setAuthError(null)
     await sbSignOutUser()
@@ -204,7 +192,6 @@ export function useAuthQuota() {
     refreshQuota,
     signInWithEmail,
     signUpWithEmail,
-    signInWithGoogle,
     signOut,
   }
 }
